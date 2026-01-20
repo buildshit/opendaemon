@@ -1,0 +1,27 @@
+[package]
+name = "dmn-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+regex = { workspace = true }
+petgraph = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
+[lib]
+name = "dmn_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dmn"
+path = "src/main.rs"

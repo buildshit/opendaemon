@@ -1,0 +1,19 @@
+[package]
+name = "dmn-pro"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dmn-core = { path = "../core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+
+[features]
+default = []
+auth = []
+remote = []

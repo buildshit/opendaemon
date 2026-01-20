@@ -1,0 +1,828 @@
+use crate::config::ServiceConfig;
+use crate::logs::{LogBuffer, LogLine, LogStream};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+use thiserror::Error;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+use tokio::time::timeout;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServiceStatus {
+    NotStarted,
+    Starting,
+    Running,
+    Stopped,
+    Failed { exit_code: i32 },
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Service not found: {0}")]
+    ServiceNotFound(String),
+    #[error("Service already running: {0}")]
+    AlreadyRunning(String),
+    #[error("Service not running: {0}")]
+    NotRunning(String),
+    #[error("Failed to parse command: {0}")]
+    CommandParse(String),
+    #[error("Timeout waiting for process to stop: {0}")]
+    StopTimeout(String),
+}
+
+pub struct ManagedProcess {
+    pub service_name: String,
+    pub child: Child,
+    pub status: ServiceStatus,
+    pub started_at: SystemTime,
+    pub env_vars: HashMap<String, String>,
+}
+
+pub struct ProcessManager {
+    processes: HashMap<String, ManagedProcess>,
+    log_buffer: Arc<Mutex<LogBuffer>>,
+}
+
+impl ProcessManager {
+    pub fn new(log_buffer: Arc<Mutex<LogBuffer>>) -> Self {
+        Self {
+            processes: HashMap::new(),
+            log_buffer,
+        }
+    }
+
+    /// Spawn a service process with the given configuration
+    pub async fn spawn_service(
+        &mut self,
+        service_name: &str,
+        config: &ServiceConfig,
+    ) -> Result<(), ProcessError> {
+        // Check if service is already running
+        if let Some(process) = self.processes.get(service_name) {
+            if matches!(process.status, ServiceStatus::Starting | ServiceStatus::Running) {
+                return Err(ProcessError::AlreadyRunning(service_name.to_string()));
+            }
+        }
+
+        // Parse command string
+        let parts = Self::parse_command(&config.command)?;
+        if parts.is_empty() {
+            return Err(ProcessError::CommandParse("Command is empty".to_string()));
+        }
+
+        let program = &parts[0];
+        let args = &parts[1..];
+
+        // Load environment variables from env_file if specified
+        let mut env_vars = HashMap::new();
+        if let Some(env_file) = &config.env_file {
+            let env_path = std::path::Path::new(env_file);
+            env_vars = crate::config::load_env_file(env_path)
+                .map_err(|e| ProcessError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        }
+
+        // Spawn the process
+        let mut command = Command::new(program);
+        command.args(args);
+        
+        // Set environment variables
+        for (key, value) in &env_vars {
+            command.env(key, value);
+        }
+
+        // Pipe stdout and stderr
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+
+        let mut child = command.spawn()?;
+
+        // Get stdout and stderr handles
+        let stdout = child.stdout.take().ok_or_else(|| {
+            ProcessError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to capture stdout",
+            ))
+        })?;
+
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ProcessError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to capture stderr",
+            ))
+        })?;
+
+        // Create managed process
+        let managed_process = ManagedProcess {
+            service_name: service_name.to_string(),
+            child,
+            status: ServiceStatus::Starting,
+            started_at: SystemTime::now(),
+            env_vars: env_vars.clone(),
+        };
+
+        self.processes.insert(service_name.to_string(), managed_process);
+
+        // Spawn async tasks to read stdout and stderr
+        let service_name_clone = service_name.to_string();
+        let log_buffer_clone = Arc::clone(&self.log_buffer);
+        tokio::spawn(async move {
+            Self::stream_output(service_name_clone, stdout, LogStream::Stdout, log_buffer_clone).await;
+        });
+
+        let service_name_clone = service_name.to_string();
+        let log_buffer_clone = Arc::clone(&self.log_buffer);
+        tokio::spawn(async move {
+            Self::stream_output(service_name_clone, stderr, LogStream::Stderr, log_buffer_clone).await;
+        });
+
+        Ok(())
+    }
+
+    /// Stream output from stdout or stderr to the log buffer
+    async fn stream_output<R>(
+        service_name: String,
+        reader: R,
+        stream: LogStream,
+        log_buffer: Arc<Mutex<LogBuffer>>,
+    ) where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut lines = BufReader::new(reader).lines();
+        
+        while let Ok(Some(line)) = lines.next_line().await {
+            let log_line = LogLine {
+                timestamp: SystemTime::now(),
+                content: line,
+                stream: stream.clone(),
+            };
+
+            let mut buffer = log_buffer.lock().await;
+            buffer.append(&service_name, log_line);
+        }
+    }
+
+    /// Stop a service gracefully with SIGTERM, then force kill if needed
+    pub async fn stop_service(&mut self, service_name: &str) -> Result<(), ProcessError> {
+        let process = self.processes.get_mut(service_name)
+            .ok_or_else(|| ProcessError::ServiceNotFound(service_name.to_string()))?;
+
+        // Check if process is actually running
+        if matches!(process.status, ServiceStatus::Stopped | ServiceStatus::Failed { .. }) {
+            return Err(ProcessError::NotRunning(service_name.to_string()));
+        }
+
+        // Try graceful shutdown with SIGTERM (or equivalent on Windows)
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            
+            if let Some(pid) = process.child.id() {
+                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, we can't send SIGTERM, so we'll just try to kill
+            let _ = process.child.kill().await;
+        }
+
+        // Wait for process to exit with timeout
+        let wait_result = timeout(Duration::from_secs(10), process.child.wait()).await;
+
+        match wait_result {
+            Ok(Ok(exit_status)) => {
+                // Process exited within timeout
+                if exit_status.success() {
+                    process.status = ServiceStatus::Stopped;
+                } else {
+                    process.status = ServiceStatus::Failed {
+                        exit_code: exit_status.code().unwrap_or(-1),
+                    };
+                }
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                // Error waiting for process
+                Err(ProcessError::Io(e))
+            }
+            Err(_) => {
+                // Timeout - force kill
+                process.child.kill().await?;
+                process.child.wait().await?;
+                process.status = ServiceStatus::Stopped;
+                Ok(())
+            }
+        }
+    }
+
+    /// Restart a service (stop then start)
+    pub async fn restart_service(
+        &mut self,
+        service_name: &str,
+        config: &ServiceConfig,
+    ) -> Result<(), ProcessError> {
+        // Stop the service if it's running
+        if self.processes.contains_key(service_name) {
+            self.stop_service(service_name).await?;
+        }
+
+        // Start the service
+        self.spawn_service(service_name, config).await?;
+
+        Ok(())
+    }
+
+    /// Get the current status of a service
+    pub fn get_status(&self, service_name: &str) -> Option<ServiceStatus> {
+        self.processes.get(service_name).map(|p| p.status.clone())
+    }
+
+    /// Update the status of a service
+    pub fn update_status(&mut self, service_name: &str, status: ServiceStatus) {
+        if let Some(process) = self.processes.get_mut(service_name) {
+            process.status = status;
+        }
+    }
+
+    /// Get all service statuses
+    pub fn get_all_statuses(&self) -> HashMap<String, ServiceStatus> {
+        self.processes
+            .iter()
+            .map(|(name, process)| (name.clone(), process.status.clone()))
+            .collect()
+    }
+
+    /// Check if a service is running
+    pub fn is_running(&self, service_name: &str) -> bool {
+        self.processes
+            .get(service_name)
+            .map(|p| matches!(p.status, ServiceStatus::Running))
+            .unwrap_or(false)
+    }
+
+    /// Parse a command string into program and arguments
+    /// Simple implementation that splits on whitespace
+    /// TODO: Handle quoted arguments properly
+    fn parse_command(command: &str) -> Result<Vec<String>, ProcessError> {
+        let parts: Vec<String> = command
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+
+        if parts.is_empty() {
+            return Err(ProcessError::CommandParse("Command is empty".to_string()));
+        }
+
+        Ok(parts)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ServiceConfig;
+
+    fn create_test_log_buffer() -> Arc<Mutex<LogBuffer>> {
+        Arc::new(Mutex::new(LogBuffer::new(1000)))
+    }
+
+    #[test]
+    fn test_service_status_variants() {
+        let status1 = ServiceStatus::NotStarted;
+        let status2 = ServiceStatus::Starting;
+        let status3 = ServiceStatus::Running;
+        let status4 = ServiceStatus::Stopped;
+        let status5 = ServiceStatus::Failed { exit_code: 1 };
+
+        assert_eq!(status1, ServiceStatus::NotStarted);
+        assert_eq!(status2, ServiceStatus::Starting);
+        assert_eq!(status3, ServiceStatus::Running);
+        assert_eq!(status4, ServiceStatus::Stopped);
+        assert_eq!(status5, ServiceStatus::Failed { exit_code: 1 });
+    }
+
+    #[test]
+    fn test_process_manager_new() {
+        let log_buffer = create_test_log_buffer();
+        let manager = ProcessManager::new(log_buffer);
+        assert_eq!(manager.processes.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_command_simple() {
+        let result = ProcessManager::parse_command("echo hello");
+        assert!(result.is_ok());
+        let parts = result.unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "echo");
+        assert_eq!(parts[1], "hello");
+    }
+
+    #[test]
+    fn test_parse_command_multiple_args() {
+        let result = ProcessManager::parse_command("cargo run --release --bin myapp");
+        assert!(result.is_ok());
+        let parts = result.unwrap();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0], "cargo");
+        assert_eq!(parts[1], "run");
+        assert_eq!(parts[2], "--release");
+        assert_eq!(parts[3], "--bin");
+        assert_eq!(parts[4], "myapp");
+    }
+
+    #[test]
+    fn test_parse_command_empty() {
+        let result = ProcessManager::parse_command("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_command_whitespace_only() {
+        let result = ProcessManager::parse_command("   ");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_service_simple_command() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        let result = manager.spawn_service("test_service", &config).await;
+        assert!(result.is_ok());
+
+        // Check that process was added
+        assert!(manager.processes.contains_key("test_service"));
+        
+        // Check initial status
+        let status = manager.get_status("test_service");
+        assert!(status.is_some());
+        assert_eq!(status.unwrap(), ServiceStatus::Starting);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_service_already_running() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "sleep 10";
+        #[cfg(windows)]
+        let command = "cmd /c timeout /t 10";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        // Spawn first time
+        let result1 = manager.spawn_service("test_service", &config).await;
+        assert!(result1.is_ok());
+
+        // Try to spawn again
+        let result2 = manager.spawn_service("test_service", &config).await;
+        assert!(result2.is_err());
+        assert!(matches!(result2.unwrap_err(), ProcessError::AlreadyRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_service_with_env_file() {
+        use std::io::Write;
+        
+        let temp_dir = std::env::temp_dir();
+        let env_path = temp_dir.join("test_spawn_env.env");
+        
+        // Create test env file
+        let mut file = std::fs::File::create(&env_path).unwrap();
+        file.write_all(b"TEST_VAR=test_value\n").unwrap();
+        drop(file);
+
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: Some(env_path.to_str().unwrap().to_string()),
+        };
+
+        let result = manager.spawn_service("test_service", &config).await;
+        assert!(result.is_ok());
+
+        // Check that env vars were loaded
+        let process = manager.processes.get("test_service").unwrap();
+        assert_eq!(process.env_vars.get("TEST_VAR"), Some(&"test_value".to_string()));
+
+        std::fs::remove_file(env_path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_status() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        // Non-existent service
+        assert!(manager.get_status("nonexistent").is_none());
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        // Spawn a service
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+        
+        let status = manager.get_status("test_service");
+        assert!(status.is_some());
+        assert_eq!(status.unwrap(), ServiceStatus::Starting);
+    }
+
+    #[tokio::test]
+    async fn test_update_status() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+        
+        // Update status
+        manager.update_status("test_service", ServiceStatus::Running);
+        
+        let status = manager.get_status("test_service");
+        assert_eq!(status.unwrap(), ServiceStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn test_get_all_statuses() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("service1", &config).await.unwrap();
+        manager.spawn_service("service2", &config).await.unwrap();
+        
+        manager.update_status("service1", ServiceStatus::Running);
+        manager.update_status("service2", ServiceStatus::Starting);
+
+        let statuses = manager.get_all_statuses();
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.get("service1"), Some(&ServiceStatus::Running));
+        assert_eq!(statuses.get("service2"), Some(&ServiceStatus::Starting));
+    }
+
+    #[tokio::test]
+    async fn test_is_running() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        // Non-existent service
+        assert!(!manager.is_running("nonexistent"));
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+        
+        // Starting status - not running yet
+        assert!(!manager.is_running("test_service"));
+
+        // Update to running
+        manager.update_status("test_service", ServiceStatus::Running);
+        assert!(manager.is_running("test_service"));
+
+        // Update to stopped
+        manager.update_status("test_service", ServiceStatus::Stopped);
+        assert!(!manager.is_running("test_service"));
+    }
+
+    #[tokio::test]
+    async fn test_stop_service_not_found() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        let result = manager.stop_service("nonexistent").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ProcessError::ServiceNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_stop_service_already_stopped() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+        manager.update_status("test_service", ServiceStatus::Stopped);
+
+        let result = manager.stop_service("test_service").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ProcessError::NotRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn test_stop_service_graceful() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        // Use a command that will run for a bit
+        #[cfg(unix)]
+        let command = "sleep 1";
+        #[cfg(windows)]
+        let command = "timeout /t 1";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+        manager.update_status("test_service", ServiceStatus::Running);
+
+        // Give it a moment to actually start
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let result = manager.stop_service("test_service").await;
+        assert!(result.is_ok());
+
+        // Check status was updated
+        let status = manager.get_status("test_service").unwrap();
+        assert!(matches!(status, ServiceStatus::Stopped | ServiceStatus::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_restart_service() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        // Initial spawn
+        manager.spawn_service("test_service", &config).await.unwrap();
+        manager.update_status("test_service", ServiceStatus::Running);
+
+        // Restart
+        let result = manager.restart_service("test_service", &config).await;
+        assert!(result.is_ok());
+
+        // Should be in Starting status again
+        let status = manager.get_status("test_service").unwrap();
+        assert_eq!(status, ServiceStatus::Starting);
+    }
+
+    #[tokio::test]
+    async fn test_restart_service_not_running() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo test";
+        #[cfg(windows)]
+        let command = "cmd /c echo test";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        // Restart without spawning first
+        let result = manager.restart_service("test_service", &config).await;
+        assert!(result.is_ok());
+
+        // Should be spawned now
+        assert!(manager.processes.contains_key("test_service"));
+    }
+
+    #[tokio::test]
+    async fn test_log_capture_stdout() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(Arc::clone(&log_buffer));
+
+        #[cfg(unix)]
+        let command = "echo hello_stdout";
+        #[cfg(windows)]
+        let command = "cmd /c echo hello_stdout";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+
+        // Wait for process to complete and logs to be captured
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let buffer = log_buffer.lock().await;
+        let logs = buffer.get_all_lines("test_service");
+        
+        // Should have captured the output
+        assert!(!logs.is_empty());
+        assert!(logs.iter().any(|l| l.content.contains("hello_stdout")));
+    }
+
+    #[tokio::test]
+    async fn test_log_capture_stderr() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(Arc::clone(&log_buffer));
+
+        // Command that writes to stderr
+        #[cfg(unix)]
+        let command = "sh -c 'echo hello_stderr >&2'";
+        #[cfg(windows)]
+        let command = "cmd /c echo hello_stderr 1>&2";
+
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+
+        // Wait for process to complete and logs to be captured
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let buffer = log_buffer.lock().await;
+        let logs = buffer.get_all_lines("test_service");
+        
+        // Should have captured the stderr output
+        assert!(!logs.is_empty());
+        
+        // Check that at least one log line is from stderr
+        let has_stderr = logs.iter().any(|l| matches!(l.stream, LogStream::Stderr));
+        assert!(has_stderr);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_services() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command1 = "echo service1";
+        #[cfg(windows)]
+        let command1 = "cmd /c echo service1";
+
+        #[cfg(unix)]
+        let command2 = "echo service2";
+        #[cfg(windows)]
+        let command2 = "cmd /c echo service2";
+
+        let config1 = ServiceConfig {
+            command: command1.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        let config2 = ServiceConfig {
+            command: command2.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("service1", &config1).await.unwrap();
+        manager.spawn_service("service2", &config2).await.unwrap();
+
+        assert_eq!(manager.processes.len(), 2);
+        assert!(manager.processes.contains_key("service1"));
+        assert!(manager.processes.contains_key("service2"));
+    }
+
+    #[tokio::test]
+    async fn test_process_exit_handling() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        #[cfg(unix)]
+        let command = "echo quick_exit";
+        #[cfg(windows)]
+        let command = "cmd /c echo quick_exit";
+
+        // Command that exits immediately
+        let config = ServiceConfig {
+            command: command.to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager.spawn_service("test_service", &config).await.unwrap();
+
+        // Wait for process to exit
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Process should still be in the map (we don't auto-remove)
+        assert!(manager.processes.contains_key("test_service"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_command() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        let config = ServiceConfig {
+            command: "this_command_does_not_exist_12345".to_string(),
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        let result = manager.spawn_service("test_service", &config).await;
+        assert!(result.is_err());
+    }
+}

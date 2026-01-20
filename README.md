@@ -52,14 +52,10 @@ cargo run --bin dmn -- status
 - **thiserror**: Error handling
 - **reqwest**: HTTP client for URL polling
 
-## Development Status
-
-This project is currently in initial development. The basic project structure and module scaffolding have been set up.
-
 
 # Example of how this would be used
 
-User would type `dmn start <service name>` in the terminal and it would start the <service name> defined in the `dmn.json` file.
+User would type `dmn start <service name>` in the terminal and it would start the service name defined in the `dmn.json` file.
 
 Example of how the dmn.json would look:
 
@@ -104,4 +100,3 @@ When a user asks an AI: *"Why is my backend failing?"*
 *   **Without `dmn`:** The AI has to guess which terminal window has the error.
 *   **With `dmn` (MCP):** The AI can literally ask the orchestrator: *"Which service is currently in the `failed` or `starting` state?"* The orchestrator replies: *"The DB is ready, but the Backend has been `starting` for 30 seconds and hasn't seen the 'Server listening' log."* 
 *   **The Win:** The AI now has a **map** of the project's health, not just a pile of logs.
-# opendaemon
