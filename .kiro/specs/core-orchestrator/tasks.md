@@ -176,7 +176,6 @@
 
 - [x] 8. Implement JSON-RPC server for extension communication
   - [x] 8.1 Create RPC request and response types
-
     - Define RpcRequest enum with all methods
     - Define RpcResponse struct with result/error
     - Implement serialization/deserialization
@@ -205,112 +204,128 @@
     - Write integration tests for event streaming
     - _Requirements: 9.4, 9.5_
 
-- [ ] 9. Implement MCP server for AI agent integration
-  - [ ] 9.1 Create MCP server structure
+- [-] 9. Implement MCP server for AI agent integration
+  - [x] 9.1 Create MCP server structure
     - Create DmnMcpServer struct with orchestrator reference
     - Set up MCP SDK integration (or implement protocol manually)
     - _Requirements: 11.1_
-  - [ ] 9.2 Implement read_logs tool
+
+  - [x] 9.2 Implement read_logs tool
     - Register tool with MCP server
     - Parse service name and lines parameter (number or "all")
     - Query log buffer and return formatted logs
     - Handle non-existent services with error
     - Write unit tests for various parameter combinations
     - _Requirements: 11.2, 11.3, 11.6_
-  - [ ] 9.3 Implement get_service_status tool
+
+  - [x] 9.3 Implement get_service_status tool
     - Register tool with MCP server
     - Query process manager for all service statuses
     - Return formatted status map
     - Write unit tests for status queries
     - _Requirements: 11.4_
-  - [ ] 9.4 Implement list_services tool
+
+  - [x] 9.4 Implement list_services tool
     - Register tool with MCP server
     - Return list of all service names from config
     - Write unit tests for service listing
     - _Requirements: 11.5_
-  - [ ] 9.5 Implement MCP server stdio listener
+
+  - [x] 9.5 Implement MCP server stdio listener
     - Set up stdio communication for MCP protocol
     - Handle tool calls and return results
     - Write integration tests with mock MCP client
     - _Requirements: 11.1_
-  - [ ] 9.6 Add authentication placeholder for Pro features
+
+  - [x] 9.6 Add authentication placeholder for Pro features
     - Add auth check before executing tools
     - Return error if not authenticated
     - Write unit tests for auth gating
     - _Requirements: 11.6, 11.7_
 
-- [ ] 10. Create CLI entry point
-  - [ ] 10.1 Implement main.rs with clap argument parsing
+- [x] 10. Create CLI entry point
+  - [x] 10.1 Implement main.rs with clap argument parsing
     - Define CLI commands: daemon, mcp, start, stop, status
     - Parse arguments and dispatch to appropriate mode
     - Write integration tests for CLI invocation
     - _Requirements: 9.1, 11.1_
-  - [ ] 10.2 Implement daemon mode
+
+  - [x] 10.2 Implement daemon mode
     - Load dmn.json configuration
     - Initialize orchestrator
     - Start JSON-RPC server on stdio
     - Write integration tests for daemon mode
     - _Requirements: 9.1, 9.3_
-  - [ ] 10.3 Implement MCP mode
+
+  - [x] 10.3 Implement MCP mode
     - Load dmn.json configuration
     - Initialize orchestrator
     - Start MCP server on stdio
     - Write integration tests for MCP mode
     - _Requirements: 11.1_
 
-- [ ] 11. Create VS Code extension
-  - [ ] 11.1 Set up TypeScript extension project
+- [x] 11. Create VS Code extension
+  - [x] 11.1 Set up TypeScript extension project
+
     - Initialize with yo code generator
     - Configure package.json with extension metadata
     - Set up build scripts and dependencies
     - _Requirements: 9.1_
-  - [ ] 11.2 Implement extension activation and dmn.json detection
+
+  - [x] 11.2 Implement extension activation and dmn.json detection
     - Activate on workspace open
     - Scan for dmn.json file in workspace root
     - Show notification if dmn.json found
     - Write tests for file detection
     - _Requirements: 9.1, 12.1_
-  - [ ] 11.3 Implement daemon process spawning
+
+  - [x] 11.3 Implement daemon process spawning
     - Bundle Rust binary with extension
     - Spawn dmn binary in daemon mode
     - Set up stdin/stdout communication
     - Handle process crashes and restart
     - Write tests for process lifecycle
     - _Requirements: 9.1, 9.6_
-  - [ ] 11.4 Implement JSON-RPC client
+
+  - [x] 11.4 Implement JSON-RPC client
     - Create RPC client class for sending requests
     - Implement request/response matching with IDs
     - Handle RPC errors
     - Write unit tests for RPC communication
     - _Requirements: 9.3_
-  - [ ] 11.5 Implement service tree view
+
+  - [x] 11.5 Implement service tree view
     - Create ServiceTreeDataProvider class
     - Register tree view in package.json
     - Display services with status icons
     - Update tree on status changes
     - Write tests for tree view updates
     - _Requirements: 9.2, 9.4_
-  - [ ] 11.6 Implement tree view commands
+
+  - [x] 11.6 Implement tree view commands
     - Register commands: startAll, stopAll, startService, stopService, restartService
     - Add context menu items to tree view
     - Send RPC requests to daemon process
     - Write tests for command execution
     - _Requirements: 9.3, 10.1, 10.2, 10.4_
-  - [ ] 11.7 Implement log output panel
+
+  - [x] 11.7 Implement log output panel
     - Create output channel for logs
     - Implement showLogs command
     - Request logs via RPC and display in output panel
     - Stream real-time logs from daemon events
     - Write tests for log display
     - _Requirements: 9.5, 6.3, 6.4_
-  - [ ] 11.8 Implement dmn.json creation wizard
+
+  - [x] 11.8 Implement dmn.json creation wizard
     - Detect projects without dmn.json
     - Show notification offering to create config
     - Scan for package.json scripts and docker-compose.yml
     - Generate initial dmn.json with suggested services
     - Write tests for config generation
     - _Requirements: 12.1, 12.2, 12.3_
-  - [ ] 11.9 Implement file watcher for dmn.json changes
+
+  - [x] 11.9 Implement file watcher for dmn.json changes
     - Watch dmn.json for modifications
     - Reload configuration and update tree view
     - Handle file deletion

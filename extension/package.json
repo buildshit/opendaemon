@@ -1,0 +1,123 @@
+{
+  "name": "opendaemon",
+  "displayName": "OpenDaemon",
+  "description": "Orchestrate local development services with declarative configuration",
+  "version": "0.1.0",
+  "publisher": "opendaemon",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:dmn.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "opendaemon.startAll",
+        "title": "Start All Services",
+        "category": "OpenDaemon",
+        "icon": "$(play)"
+      },
+      {
+        "command": "opendaemon.stopAll",
+        "title": "Stop All Services",
+        "category": "OpenDaemon",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "opendaemon.startService",
+        "title": "Start Service",
+        "category": "OpenDaemon",
+        "icon": "$(play)"
+      },
+      {
+        "command": "opendaemon.stopService",
+        "title": "Stop Service",
+        "category": "OpenDaemon",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "opendaemon.restartService",
+        "title": "Restart Service",
+        "category": "OpenDaemon",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "opendaemon.showLogs",
+        "title": "Show Logs",
+        "category": "OpenDaemon",
+        "icon": "$(output)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "opendaemon.services",
+          "name": "OpenDaemon Services"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "opendaemon.startAll",
+          "when": "view == opendaemon.services",
+          "group": "navigation@1"
+        },
+        {
+          "command": "opendaemon.stopAll",
+          "when": "view == opendaemon.services",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "opendaemon.startService",
+          "when": "view == opendaemon.services && viewItem == service",
+          "group": "inline@1"
+        },
+        {
+          "command": "opendaemon.stopService",
+          "when": "view == opendaemon.services && viewItem == service",
+          "group": "inline@2"
+        },
+        {
+          "command": "opendaemon.restartService",
+          "when": "view == opendaemon.services && viewItem == service",
+          "group": "inline@3"
+        },
+        {
+          "command": "opendaemon.showLogs",
+          "when": "view == opendaemon.services && viewItem == service",
+          "group": "navigation@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.54.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {}
+}

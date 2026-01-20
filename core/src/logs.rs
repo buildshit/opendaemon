@@ -8,6 +8,20 @@ pub struct LogLine {
     pub stream: LogStream,
 }
 
+impl LogLine {
+    /// Format timestamp as a string for display
+    pub fn timestamp_str(&self) -> String {
+        match self.timestamp.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(duration) => {
+                let secs = duration.as_secs();
+                let millis = duration.subsec_millis();
+                format!("{}.{:03}", secs, millis)
+            }
+            Err(_) => "unknown".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LogStream {
     Stdout,
