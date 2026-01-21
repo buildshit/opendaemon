@@ -29,8 +29,8 @@ export class LogManager {
 
         try {
             this.currentService = serviceName;
-            
-            const result = await rpcClient.request('GetLogs', {
+
+            const result = await rpcClient.request('getLogs', {
                 service: serviceName,
                 lines: lines || 'all'
             }) as { logs: LogLine[] };

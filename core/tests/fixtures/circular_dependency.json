@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "services": {
+    "service_a": {
+      "command": "echo 'Service A'",
+      "depends_on": ["service_b"]
+    },
+    "service_b": {
+      "command": "echo 'Service B'",
+      "depends_on": ["service_c"]
+    },
+    "service_c": {
+      "command": "echo 'Service C'",
+      "depends_on": ["service_a"]
+    }
+  }
+}

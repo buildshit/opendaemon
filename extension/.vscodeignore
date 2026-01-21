@@ -1,9 +1,25 @@
+# Development files
 .vscode/**
 .vscode-test/**
 src/**
 .gitignore
 .eslintrc.json
+tsconfig.json
+
+# Build artifacts
 **/*.map
 **/*.ts
-tsconfig.json
+!out/**/*.js
+
+# Dependencies (not needed in package)
 node_modules/**
+
+# Test files
+**/test/**
+**/*.test.js
+
+# Documentation (keep README)
+docs/**
+
+# Binaries are included
+!bin/**

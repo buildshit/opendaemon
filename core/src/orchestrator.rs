@@ -15,6 +15,7 @@ pub enum OrchestratorEvent {
     ServiceFailed { service: String, error: String },
     ServiceStopped { service: String },
     LogLine { service: String, line: LogLine },
+    Error { message: String, category: String },
 }
 
 #[derive(Debug, Error)]
@@ -97,6 +98,22 @@ impl Orchestrator {
         let _ = self.event_tx.send(event);
     }
     
+    /// Emit an error event with proper categorization
+    fn emit_error(&self, error: &OrchestratorError) {
+        let category = match error {
+            OrchestratorError::Config(_) => "CONFIG",
+            OrchestratorError::Graph(_) => "GRAPH",
+            OrchestratorError::Process(_) => "PROCESS",
+            OrchestratorError::ServiceNotFound(_) => "SERVICE",
+            OrchestratorError::ReadyError(_) => "READY",
+        };
+        
+        self.emit_event(OrchestratorEvent::Error {
+            message: error.to_string(),
+            category: category.to_string(),
+        });
+    }
+    
     /// Get the configuration
     pub fn config(&self) -> &DmnConfig {
         &self.config
@@ -107,16 +124,32 @@ impl Orchestrator {
         &self.graph
     }
     
+    /// Check if a service is ready
+    pub async fn is_service_ready(&self, service_name: &str) -> bool {
+        let watcher = self.ready_watcher.lock().await;
+        watcher.is_ready(service_name)
+    }
+    
     /// Start all services in dependency order
     /// Services are started according to their dependencies, with each service
     /// waiting for its dependencies to be ready before starting
     pub async fn start_all(&mut self) -> Result<(), OrchestratorError> {
         // Get the start order from the dependency graph
-        let start_order = self.graph.get_start_order()?;
+        let start_order = match self.graph.get_start_order() {
+            Ok(order) => order,
+            Err(e) => {
+                let err = OrchestratorError::Graph(e);
+                self.emit_error(&err);
+                return Err(err);
+            }
+        };
         
         // Start each service in order
         for service_name in start_order {
-            self.start_service_with_deps(&service_name).await?;
+            if let Err(e) = self.start_service_with_deps(&service_name).await {
+                self.emit_error(&e);
+                return Err(e);
+            }
         }
         
         Ok(())
@@ -127,7 +160,11 @@ impl Orchestrator {
     pub async fn start_service_with_deps(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
         // Check if service exists in config
         let service_config = self.config.services.get(service_name)
-            .ok_or_else(|| OrchestratorError::ServiceNotFound(service_name.to_string()))?
+            .ok_or_else(|| {
+                let err = OrchestratorError::ServiceNotFound(service_name.to_string());
+                self.emit_error(&err);
+                err
+            })?
             .clone();
         
         // Emit starting event
@@ -136,7 +173,14 @@ impl Orchestrator {
         });
         
         // Get dependencies for this service
-        let dependencies = self.graph.get_dependencies(service_name)?;
+        let dependencies = match self.graph.get_dependencies(service_name) {
+            Ok(deps) => deps,
+            Err(e) => {
+                let err = OrchestratorError::Graph(e);
+                self.emit_error(&err);
+                return Err(err);
+            }
+        };
         
         // Wait for all dependencies to be ready
         for dep in dependencies {
@@ -147,12 +191,19 @@ impl Orchestrator {
             
             if !is_ready {
                 // Wait for dependency to become ready
-                self.wait_for_ready(&dep).await?;
+                if let Err(e) = self.wait_for_ready(&dep).await {
+                    self.emit_error(&e);
+                    return Err(e);
+                }
             }
         }
         
         // Spawn the service process
-        self.process_manager.spawn_service(service_name, &service_config).await?;
+        if let Err(e) = self.process_manager.spawn_service(service_name, &service_config).await {
+            let err = OrchestratorError::Process(e);
+            self.emit_error(&err);
+            return Err(err);
+        }
         
         // Update status to Starting
         self.process_manager.update_status(service_name, crate::process::ServiceStatus::Starting);
@@ -264,14 +315,24 @@ impl Orchestrator {
     /// Services are stopped in reverse order to ensure dependents are stopped before dependencies
     pub async fn stop_all(&mut self) -> Result<(), OrchestratorError> {
         // Get the start order and reverse it for stop order
-        let start_order = self.graph.get_start_order()?;
+        let start_order = match self.graph.get_start_order() {
+            Ok(order) => order,
+            Err(e) => {
+                let err = OrchestratorError::Graph(e);
+                self.emit_error(&err);
+                return Err(err);
+            }
+        };
         let stop_order: Vec<_> = start_order.into_iter().rev().collect();
         
         // Stop each service in reverse order
         for service_name in stop_order {
             // Only stop if the service is actually running
             if self.process_manager.get_status(&service_name).is_some() {
-                self.stop_service(&service_name).await?;
+                if let Err(e) = self.stop_service(&service_name).await {
+                    self.emit_error(&e);
+                    return Err(e);
+                }
             }
         }
         
@@ -283,7 +344,9 @@ impl Orchestrator {
     pub async fn stop_service(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
         // Check if service exists in config
         if !self.config.services.contains_key(service_name) {
-            return Err(OrchestratorError::ServiceNotFound(service_name.to_string()));
+            let err = OrchestratorError::ServiceNotFound(service_name.to_string());
+            self.emit_error(&err);
+            return Err(err);
         }
         
         // Check if service is already stopped or not running
@@ -298,19 +361,33 @@ impl Orchestrator {
         }
         
         // Get list of dependent services (services that depend on this one)
-        let dependents = self.graph.get_dependents(service_name)?;
+        let dependents = match self.graph.get_dependents(service_name) {
+            Ok(deps) => deps,
+            Err(e) => {
+                let err = OrchestratorError::Graph(e);
+                self.emit_error(&err);
+                return Err(err);
+            }
+        };
         
         // Stop dependents first (cascade)
         for dependent in dependents {
             // Only stop if the service is actually running
             if self.process_manager.get_status(&dependent).is_some() {
                 // Use Box::pin to handle recursion
-                Box::pin(self.stop_service(&dependent)).await?;
+                if let Err(e) = Box::pin(self.stop_service(&dependent)).await {
+                    self.emit_error(&e);
+                    return Err(e);
+                }
             }
         }
         
         // Now stop the target service itself
-        self.process_manager.stop_service(service_name).await?;
+        if let Err(e) = self.process_manager.stop_service(service_name).await {
+            let err = OrchestratorError::Process(e);
+            self.emit_error(&err);
+            return Err(err);
+        }
         
         // Reset ready status
         {
@@ -331,17 +408,25 @@ impl Orchestrator {
     pub async fn restart_service(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
         // Check if service exists in config
         if !self.config.services.contains_key(service_name) {
-            return Err(OrchestratorError::ServiceNotFound(service_name.to_string()));
+            let err = OrchestratorError::ServiceNotFound(service_name.to_string());
+            self.emit_error(&err);
+            return Err(err);
         }
         
         // Stop the service (and its dependents)
-        self.stop_service(service_name).await?;
+        if let Err(e) = self.stop_service(service_name).await {
+            self.emit_error(&e);
+            return Err(e);
+        }
         
         // Wait a moment for cleanup
         tokio::time::sleep(Duration::from_millis(100)).await;
         
         // Start the service again
-        self.start_service_with_deps(service_name).await?;
+        if let Err(e) = self.start_service_with_deps(service_name).await {
+            self.emit_error(&e);
+            return Err(e);
+        }
         
         Ok(())
     }

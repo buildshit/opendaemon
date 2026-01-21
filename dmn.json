@@ -1,0 +1,12 @@
+{
+    "version": "1.0",
+    "services": {
+        "test-service": {
+            "command": "echo 'Hello OpenDaemon'",
+            "ready_when": {
+                "type": "log_contains",
+                "pattern": "Hello"
+            }
+        }
+    }
+}

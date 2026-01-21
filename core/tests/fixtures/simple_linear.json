@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "cmd /c echo Database starting... && timeout /t 1 /nobreak >nul && echo Database ready on port 5432",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready on port"
+      }
+    },
+    "backend": {
+      "command": "cmd /c echo Backend starting... && timeout /t 1 /nobreak >nul && echo Backend listening on port 3000",
+      "depends_on": ["database"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "listening on port"
+      }
+    },
+    "frontend": {
+      "command": "cmd /c echo Frontend starting... && timeout /t 1 /nobreak >nul && echo Frontend ready",
+      "depends_on": ["backend"]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "services": {
+    "frontend": {
+      "command": "echo 'Frontend'",
+      "depends_on": ["backend", "nonexistent_service"]
+    },
+    "backend": {
+      "command": "echo 'Backend'"
+    }
+  }
+}

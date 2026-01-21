@@ -2,13 +2,15 @@ import * as vscode from 'vscode';
 import { RpcClient } from './rpc-client';
 import { ServiceTreeItem } from './tree-view';
 import { LogManager } from './logs';
+import { ErrorDisplayManager } from './error-display';
 
 export class CommandManager {
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly getRpcClient: () => RpcClient | null,
-        private readonly logManager: LogManager
-    ) {}
+        private readonly logManager: LogManager,
+        private readonly getErrorDisplayManager?: () => ErrorDisplayManager | null
+    ) { }
 
     /**
      * Register all commands
@@ -49,6 +51,20 @@ export class CommandManager {
                 (item: ServiceTreeItem) => this.showLogs(item)
             )
         );
+
+        this.context.subscriptions.push(
+            vscode.commands.registerCommand(
+                'opendaemon.showErrors',
+                () => this.showErrors()
+            )
+        );
+
+        this.context.subscriptions.push(
+            vscode.commands.registerCommand(
+                'opendaemon.clearErrors',
+                () => this.clearErrors()
+            )
+        );
     }
 
     /**
@@ -69,7 +85,7 @@ export class CommandManager {
                     cancellable: false
                 },
                 async () => {
-                    await rpcClient.request('StartAll');
+                    await rpcClient.request('startAll');
                 }
             );
 
@@ -99,7 +115,7 @@ export class CommandManager {
                     cancellable: false
                 },
                 async () => {
-                    await rpcClient.request('StopAll');
+                    await rpcClient.request('stopAll');
                 }
             );
 
@@ -129,7 +145,7 @@ export class CommandManager {
                     cancellable: false
                 },
                 async () => {
-                    await rpcClient.request('StartService', { service: item.serviceName });
+                    await rpcClient.request('startService', { service: item.serviceName });
                 }
             );
 
@@ -159,7 +175,7 @@ export class CommandManager {
                     cancellable: false
                 },
                 async () => {
-                    await rpcClient.request('StopService', { service: item.serviceName });
+                    await rpcClient.request('stopService', { service: item.serviceName });
                 }
             );
 
@@ -189,7 +205,7 @@ export class CommandManager {
                     cancellable: false
                 },
                 async () => {
-                    await rpcClient.request('RestartService', { service: item.serviceName });
+                    await rpcClient.request('restartService', { service: item.serviceName });
                 }
             );
 
@@ -206,5 +222,32 @@ export class CommandManager {
      */
     private async showLogs(item: ServiceTreeItem): Promise<void> {
         await this.logManager.showLogs(item.serviceName);
+    }
+
+    /**
+     * Show error history
+     */
+    private showErrors(): void {
+        const errorDisplayManager = this.getErrorDisplayManager?.();
+        if (!errorDisplayManager) {
+            vscode.window.showInformationMessage('No errors to display');
+            return;
+        }
+
+        errorDisplayManager.showOutputPanel();
+    }
+
+    /**
+     * Clear error history
+     */
+    private clearErrors(): void {
+        const errorDisplayManager = this.getErrorDisplayManager?.();
+        if (!errorDisplayManager) {
+            return;
+        }
+
+        errorDisplayManager.clearHistory();
+        errorDisplayManager.clearOutputPanel();
+        vscode.window.showInformationMessage('Error history cleared');
     }
 }

@@ -90,17 +90,28 @@ export class DaemonManager {
      */
     private getBinaryPath(): string {
         const platform = process.platform;
-        let binaryName = 'dmn';
+        const arch = process.arch;
+        let binaryName: string;
         
+        // Select platform-specific binary
         if (platform === 'win32') {
-            binaryName = 'dmn.exe';
+            binaryName = 'dmn-win32-x64.exe';
+        } else if (platform === 'darwin') {
+            // macOS - check architecture
+            if (arch === 'arm64') {
+                binaryName = 'dmn-darwin-arm64';
+            } else {
+                binaryName = 'dmn-darwin-x64';
+            }
+        } else if (platform === 'linux') {
+            binaryName = 'dmn-linux-x64';
+        } else {
+            throw new Error(`Unsupported platform: ${platform}`);
         }
 
         // Look for binary in extension's bin directory
         const binPath = path.join(this.context.extensionPath, 'bin', binaryName);
         
-        // For development, fall back to cargo target directory
-        // In production, the binary should be bundled in bin/
         return binPath;
     }
 

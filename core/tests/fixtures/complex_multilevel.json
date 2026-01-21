@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "services": {
+    "postgres": {
+      "command": "cmd /c echo PostgreSQL starting... && timeout /t 1 /nobreak >nul && echo PostgreSQL ready",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "redis": {
+      "command": "cmd /c echo Redis starting... && timeout /t 1 /nobreak >nul && echo Redis ready",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "auth_service": {
+      "command": "cmd /c echo Auth service starting... && timeout /t 1 /nobreak >nul && echo Auth service ready",
+      "depends_on": ["postgres", "redis"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "api_gateway": {
+      "command": "cmd /c echo API Gateway starting... && timeout /t 1 /nobreak >nul && echo API Gateway ready",
+      "depends_on": ["auth_service"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "user_service": {
+      "command": "cmd /c echo User service starting... && timeout /t 1 /nobreak >nul && echo User service ready",
+      "depends_on": ["postgres", "auth_service"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "frontend": {
+      "command": "cmd /c echo Frontend starting... && timeout /t 1 /nobreak >nul && echo Frontend ready",
+      "depends_on": ["api_gateway", "user_service"]
+    }
+  }
+}

@@ -96,11 +96,11 @@ export class RpcClient extends EventEmitter {
         }
 
         // Check if it's a response (has id)
-        if ('id' in message && typeof message.id === 'number') {
+        if (typeof message === 'object' && message !== null && 'id' in message && typeof message.id === 'number') {
             this.handleResponse(message as RpcResponse);
         }
         // Check if it's a notification (no id)
-        else if ('method' in message) {
+        else if (typeof message === 'object' && message !== null && 'method' in message) {
             this.handleNotification(message as RpcNotification);
         }
     }

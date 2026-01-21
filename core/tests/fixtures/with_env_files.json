@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "cmd /c echo Database URL: %DATABASE_URL% && echo Database ready",
+      "env_file": "core/tests/fixtures/test.env",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "api_server": {
+      "command": "cmd /c echo API Key: %API_KEY% && echo Port: %PORT% && echo API server ready",
+      "env_file": "core/tests/fixtures/test.env",
+      "depends_on": ["database"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready"
+      }
+    },
+    "worker": {
+      "command": "cmd /c echo Debug mode: %DEBUG% && echo Log level: %LOG_LEVEL% && echo Worker ready",
+      "env_file": "core/tests/fixtures/test.env",
+      "depends_on": ["api_server"]
+    }
+  }
+}

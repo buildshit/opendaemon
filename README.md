@@ -1,102 +1,302 @@
 # OpenDaemon (dmn)
 
-A VS Code extension built with Rust that orchestrates local development services through a declarative `dmn.json` configuration file.
+A VS Code extension and Rust-based orchestrator for managing local development services with smart dependency ordering and AI-powered log analysis.
 
-## Project Structure
+## Overview
 
-This is a Cargo workspace with two crates:
+OpenDaemon (`dmn`) helps you manage multiple development services (databases, backend servers, frontend dev servers, etc.) through a single declarative configuration file. It handles dependency ordering, waits for services to be ready, and provides integrated log viewing—all from within VS Code.
 
-- **core**: The main orchestration engine and CLI
-- **pro**: Pro features (authentication, mcp server, remote services, etc.)
+### Key Features
 
-### Core Modules
+- **Declarative Configuration**: Define all your services in a single `dmn.json` file
+- **Smart Dependency Management**: Services start in the correct order based on dependencies
+- **Ready Detection**: Wait for services to be truly ready before starting dependents
+- **Integrated Logs**: View real-time logs from all services in VS Code
+- **AI Integration**: MCP server allows AI agents to read service logs for debugging
+- **Cross-Platform**: Works on Windows, macOS, and Linux
 
-- `config`: Configuration file parsing and validation
-- `graph`: Dependency graph construction and traversal
-- `process`: Process spawning and management
-- `logs`: Log streaming and circular buffer storage
-- `orchestrator`: Core orchestration logic coordinating all components
+## Quick Start
 
-## Building
+### Installation
 
-```bash
-cargo build
-```
+1. Install the OpenDaemon extension from the VS Code marketplace
+2. Open a workspace/folder in VS Code
+3. Create a `dmn.json` file in your workspace root (or use the wizard)
 
-## Running
+### Creating Your First Configuration
 
-```bash
-# Run in daemon mode (for VS Code extension)
-cargo run --bin dmn -- daemon
+Create a `dmn.json` file in your workspace root:
 
-# Run in MCP server mode (for AI agents)
-cargo run --bin dmn -- mcp
-
-# Start all services
-cargo run --bin dmn -- start
-
-# Stop all services
-cargo run --bin dmn -- stop
-
-# Check service status
-cargo run --bin dmn -- status
-```
-
-## Dependencies
-
-- **tokio**: Async runtime for process management
-- **serde/serde_json**: Configuration parsing
-- **clap**: CLI argument parsing
-- **regex**: Log pattern matching
-- **petgraph**: Dependency graph operations
-- **thiserror**: Error handling
-- **reqwest**: HTTP client for URL polling
-
-
-# Example of how this would be used
-
-User would type `dmn start <service name>` in the terminal and it would start the service name defined in the `dmn.json` file.
-
-Example of how the dmn.json would look:
-
-```
+```json
 {
   "version": "1.0",
   "services": {
-    "db": {
-      "command": "docker run -p 5432:5432 postgres",
-      "ready_when": { "log_contains": "database system is ready to accept connections" }
+    "database": {
+      "command": "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15",
+      "ready_when": {
+        "log_contains": "database system is ready to accept connections"
+      }
     },
     "backend": {
-      "command": "npm run dev:api",
-      "depends_on": ["db"],
-      "ready_when": { "log_contains": "Server listening on 3000" },
-      "env_file": ".env"
+      "command": "npm run dev",
+      "depends_on": ["database"],
+      "ready_when": {
+        "url_responds": "http://localhost:3000/health"
+      },
+      "env_file": ".env.local"
     },
     "frontend": {
-      "command": "npm run dev:web",
+      "command": "npm run dev --prefix ./frontend",
       "depends_on": ["backend"],
-      "ready_when": { "url_responds": "http://localhost:8080" }
+      "ready_when": {
+        "log_contains": "Local:.*http://localhost:5173"
+      }
     }
   }
 }
 ```
 
-The idea is to make it as simple as possible for the user to get their commands in the logic they need and be able to log it all properly. The MCP server would allow the AI to see the services made in the dmn.json file and ask for the information on that service properly. Allowing the services to have logic and conditions allows the exact behaviour the user needs to run the services properly and troubleshoot properly. 
+### Basic Usage
 
-### 1. The "Native + Container" Hybrid
-Unlike `docker-compose`, which forces everything into a container, or `npm` scripts, which can’t easily handle Docker, `dmn` treats them as equals. 
-*   **Your DB:** A Docker command.
-*   **Your Backend/Frontend:** Native `npm` commands.
-*   **The Result:** You get the speed of native development with the reliability of containerized infrastructure.
+#### Using the VS Code Extension
 
-### 2. "Smart Waiting" vs. "Blind Starting"
-This is the biggest pain point in dev-ops today. 
-*   **Standard Way:** You start the backend, it tries to connect to the DB immediately, the DB isn't ready, the backend crashes, you have to manually restart it.
-*   **The `dmn` Way:** Your `ready_when` logic creates a "handshake." The backend command literally isn't fired until the DB log confirms it is ready. It eliminates "Race Conditions" in local development.
+1. Open the OpenDaemon sidebar (look for the daemon icon)
+2. Click "Start All" to start all services in dependency order
+3. Click on any service to view its logs
+4. Right-click a service for options (Start, Stop, Restart)
+5. Click "Stop All" to gracefully shut down all services
 
-### 3. Structured Context for the AI
-When a user asks an AI: *"Why is my backend failing?"*
-*   **Without `dmn`:** The AI has to guess which terminal window has the error.
-*   **With `dmn` (MCP):** The AI can literally ask the orchestrator: *"Which service is currently in the `failed` or `starting` state?"* The orchestrator replies: *"The DB is ready, but the Backend has been `starting` for 30 seconds and hasn't seen the 'Server listening' log."* 
-*   **The Win:** The AI now has a **map** of the project's health, not just a pile of logs.
+#### Using the CLI
+
+```bash
+# Start the daemon (usually done automatically by the extension)
+dmn daemon
+
+# Start in MCP mode for AI agent integration
+dmn mcp
+```
+
+## Configuration Reference
+
+### Basic Structure
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "service-name": {
+      "command": "command to run",
+      "depends_on": ["other-service"],
+      "ready_when": { /* readiness condition */ },
+      "env_file": ".env"
+    }
+  }
+}
+```
+
+### Service Configuration Options
+
+#### `command` (required)
+The command to execute for this service.
+
+```json
+{
+  "command": "npm run dev"
+}
+```
+
+#### `depends_on` (optional)
+Array of service names that must be ready before this service starts.
+
+```json
+{
+  "depends_on": ["database", "redis"]
+}
+```
+
+#### `ready_when` (optional)
+Condition to determine when the service is ready. If omitted, the service is considered ready immediately after starting.
+
+**Log Pattern Matching:**
+```json
+{
+  "ready_when": {
+    "log_contains": "Server listening on port 3000"
+  }
+}
+```
+
+Supports regex patterns:
+```json
+{
+  "ready_when": {
+    "log_contains": "Listening on.*:\\d+"
+  }
+}
+```
+
+**URL Health Check:**
+```json
+{
+  "ready_when": {
+    "url_responds": "http://localhost:3000/health"
+  }
+}
+```
+
+#### `env_file` (optional)
+Path to an environment file to load for this service.
+
+```json
+{
+  "env_file": ".env.local"
+}
+```
+
+## Common Scenarios
+
+### Database + Backend + Frontend
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "postgres": {
+      "command": "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15",
+      "ready_when": {
+        "log_contains": "database system is ready to accept connections"
+      }
+    },
+    "api": {
+      "command": "cargo run --bin api-server",
+      "depends_on": ["postgres"],
+      "ready_when": {
+        "log_contains": "Listening on 0.0.0.0:8080"
+      },
+      "env_file": ".env"
+    },
+    "web": {
+      "command": "npm run dev",
+      "depends_on": ["api"],
+      "ready_when": {
+        "url_responds": "http://localhost:5173"
+      }
+    }
+  }
+}
+```
+
+### Microservices with Shared Dependencies
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "redis": {
+      "command": "redis-server",
+      "ready_when": {
+        "log_contains": "Ready to accept connections"
+      }
+    },
+    "auth-service": {
+      "command": "node services/auth/index.js",
+      "depends_on": ["redis"],
+      "ready_when": {
+        "url_responds": "http://localhost:3001/health"
+      }
+    },
+    "user-service": {
+      "command": "node services/users/index.js",
+      "depends_on": ["redis", "auth-service"],
+      "ready_when": {
+        "url_responds": "http://localhost:3002/health"
+      }
+    },
+    "api-gateway": {
+      "command": "node gateway/index.js",
+      "depends_on": ["auth-service", "user-service"],
+      "ready_when": {
+        "log_contains": "Gateway listening on port 8080"
+      }
+    }
+  }
+}
+```
+
+### Docker Compose Integration
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "infrastructure": {
+      "command": "docker-compose up",
+      "ready_when": {
+        "log_contains": "Started"
+      }
+    },
+    "app": {
+      "command": "npm start",
+      "depends_on": ["infrastructure"],
+      "ready_when": {
+        "url_responds": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+## AI Integration (MCP)
+
+OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding assistants to read service logs. See [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) for detailed setup instructions.
+
+Quick example:
+```bash
+# Start in MCP mode
+dmn mcp
+```
+
+Your AI agent can then call:
+- `read_logs` - Read logs from a specific service
+- `get_service_status` - Get status of all services
+- `list_services` - List all configured services
+
+## Troubleshooting
+
+### Services Won't Start
+
+1. Check the logs in the output panel
+2. Verify your `dmn.json` syntax is correct
+3. Ensure commands are executable from your workspace directory
+4. Check for circular dependencies
+
+### Ready Condition Never Triggers
+
+1. Verify the log pattern or URL is correct
+2. Check the service logs to see what's actually being output
+3. Try using a simpler pattern first
+4. Increase timeout if needed (future feature)
+
+### Extension Not Detecting dmn.json
+
+1. Ensure the file is in your workspace root
+2. Try reloading the VS Code window
+3. Check the file is named exactly `dmn.json`
+
+## Configuration Schema
+
+For detailed schema documentation including all available options and validation rules, see [docs/DMN_JSON_SCHEMA.md](docs/DMN_JSON_SCHEMA.md).
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Support
+
+- GitHub Issues: [Report bugs or request features](https://github.com/opendaemon/dmn/issues)
+- Documentation: [Full documentation](https://opendaemon.com/docs)
+- Community: [Discord server](https://discord.gg/opendaemon)

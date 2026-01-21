@@ -358,6 +358,12 @@ impl RpcServer {
                     }),
                 )
             }
+            OrchestratorEvent::Error { message, category } => {
+                JsonRpcNotification::new(
+                    "error",
+                    json!({ "message": message, "category": category }),
+                )
+            }
         }
     }
 

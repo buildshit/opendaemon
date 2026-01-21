@@ -266,7 +266,6 @@
 
 - [x] 11. Create VS Code extension
   - [x] 11.1 Set up TypeScript extension project
-
     - Initialize with yo code generator
     - Configure package.json with extension metadata
     - Set up build scripts and dependencies
@@ -332,81 +331,94 @@
     - Write tests for file watching
     - _Requirements: 9.7, 12.4, 12.5_
 
-- [ ] 12. Implement error handling and reporting
-  - [ ] 12.1 Create comprehensive error types
+- [x] 12. Implement error handling and reporting
+  - [x] 12.1 Create comprehensive error types
     - Define DmnError enum with all error variants
     - Implement Display and Error traits
     - Add context to errors using thiserror
     - Write unit tests for error formatting
     - _Requirements: 8.1, 8.2, 8.3_
-  - [ ] 12.2 Implement error propagation in orchestrator
+
+  - [x] 12.2 Implement error propagation in orchestrator
     - Use Result types throughout orchestrator
     - Convert errors to user-friendly messages
     - Emit error events to extension
     - Write integration tests for error scenarios
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
-  - [ ] 12.3 Implement error display in VS Code extension
+
+  - [x] 12.3 Implement error display in VS Code extension
     - Show error notifications for critical failures
     - Display error details in output panel
     - Provide actionable error messages
     - Write tests for error display
     - _Requirements: 8.1, 8.2, 8.3_
 
-- [ ] 13. Write integration tests
-  - [ ] 13.1 Create test fixtures with sample dmn.json files
+- [x] 13. Write integration tests
+  - [x] 13.1 Create test fixtures with sample dmn.json files
     - Simple linear dependencies
     - Complex multi-level dependencies
     - Services with ready conditions
     - Services with env files
     - _Requirements: 1.1, 1.2, 1.5, 2.1, 4.1, 4.3_
-  - [ ] 13.2 Write end-to-end orchestration tests
+
+  - [x] 13.2 Write end-to-end orchestration tests
     - Test full startup sequence
     - Test dependency waiting
     - Test graceful shutdown
     - Test service failures and cascades
     - _Requirements: 2.3, 3.1, 4.1, 4.2, 7.1, 7.2_
-  - [ ] 13.3 Write extension integration tests
+
+  - [x] 13.3 Write extension integration tests
     - Test RPC communication
     - Test tree view updates
     - Test log streaming
+
     - Test command execution
     - _Requirements: 9.3, 9.4, 9.5_
-  - [ ] 13.4 Write MCP integration tests
+
+  - [x] 13.4 Write MCP integration tests
     - Test tool registration
     - Test read_logs with various parameters
     - Test get_service_status
     - Test list_services
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 14. Create build and packaging scripts
-  - [ ] 14.1 Set up cross-compilation for Rust binary
+- [x] 14. Create build and packaging scripts
+  - [x] 14.1 Set up cross-compilation for Rust binary
     - Configure cargo for Windows, macOS, Linux targets
     - Create build script for all platforms
     - Test binaries on each platform
     - _Requirements: 9.6_
-  - [ ] 14.2 Bundle Rust binary with VS Code extension
+
+  - [x] 14.2 Bundle Rust binary with VS Code extension
     - Copy platform-specific binaries to extension
     - Update extension to select correct binary
     - Test extension on all platforms
+
     - _Requirements: 9.6_
-  - [ ] 14.3 Create extension packaging script
+
+  - [x] 14.3 Create extension packaging script
     - Use vsce to package extension
     - Include all necessary files
     - Test packaged extension installation
     - _Requirements: 9.1, 9.6_
 
-- [ ] 15. Write documentation
-  - [ ] 15.1 Create README with quick start guide
+- [x] 15. Write documentation
+  - [x] 15.1 Create README with quick start guide
     - Installation instructions
     - Basic usage examples
+
     - Configuration reference
     - _Requirements: 12.1, 12.2, 12.3_
-  - [ ] 15.2 Create dmn.json schema documentation
+
+  - [x] 15.2 Create dmn.json schema documentation
     - Document all configuration options
     - Provide examples for common scenarios
     - Document ready_when conditions
+
     - _Requirements: 1.1, 1.2, 1.5, 4.1, 4.3_
-  - [ ] 15.3 Create MCP integration guide
+
+  - [x] 15.3 Create MCP integration guide
     - Document available MCP tools
     - Provide examples for AI agents
     - Document authentication setup

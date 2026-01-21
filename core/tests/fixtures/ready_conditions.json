@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "services": {
+    "log_pattern_service": {
+      "command": "cmd /c echo Starting service... && timeout /t 1 /nobreak >nul && echo Server listening on http://localhost:8080",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "listening on http"
+      }
+    },
+    "url_check_service": {
+      "command": "cmd /c echo Web server starting... && timeout /t 2 /nobreak >nul && echo Web server ready",
+      "ready_when": {
+        "type": "url_responds",
+        "url": "http://localhost:8080/health"
+      }
+    },
+    "no_ready_check": {
+      "command": "cmd /c echo Simple service && timeout /t 1 /nobreak >nul"
+    },
+    "regex_pattern_service": {
+      "command": "cmd /c echo Initializing... && timeout /t 1 /nobreak >nul && echo Application started successfully on port 9000",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "started successfully.*port \\d+"
+      }
+    }
+  }
+}
