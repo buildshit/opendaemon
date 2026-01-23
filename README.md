@@ -144,6 +144,32 @@ Supports regex patterns:
 }
 ```
 
+**Custom Timeout:**
+
+For services that take longer to start, you can specify a custom timeout (in seconds):
+
+```json
+{
+  "ready_when": {
+    "log_contains": "Server listening on port 3000",
+    "timeout_seconds": 120
+  }
+}
+```
+
+Or with URL health checks:
+
+```json
+{
+  "ready_when": {
+    "url_responds": "http://localhost:3000/health",
+    "timeout_seconds": 90
+  }
+}
+```
+
+The default timeout is 60 seconds if not specified.
+
 #### `env_file` (optional)
 Path to an environment file to load for this service.
 
@@ -248,20 +274,104 @@ Path to an environment file to load for this service.
 
 ## AI Integration (MCP)
 
-OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding assistants to read service logs. See [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) for detailed setup instructions.
+OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding assistants to read service logs and help debug issues.
 
-Quick example:
-```bash
-# Start in MCP mode
-dmn mcp
+### Quick Setup
+
+1. **Test the MCP server:**
+   ```bash
+   dmn mcp
+   ```
+
+2. **Configure your AI assistant** (Kiro, Cursor, Claude Desktop)
+
+3. **Ask your AI:** "What services are configured in OpenDaemon?"
+
+**📚 Guides:**
+- **[MCP Quick Start](docs/MCP_QUICK_START.md)** - Get started in 5 minutes
+- **[MCP Integration Guide](docs/MCP_INTEGRATION.md)** - Complete technical reference
+
+### What Your AI Can Do
+
+With MCP integration, your AI assistant can:
+- **Debug issues** by reading actual service logs
+- **Check service status** and dependencies  
+- **Analyze error patterns** across multiple services
+- **Suggest fixes** based on real runtime data
+
+Example conversation:
+```
+You: "My backend is failing, can you help?"
+AI: [Checks service status and reads logs]
+    "The backend logs show a database connection error. 
+     Let me check if the database service is running..."
 ```
 
-Your AI agent can then call:
-- `read_logs` - Read logs from a specific service
-- `get_service_status` - Get status of all services
-- `list_services` - List all configured services
-
 ## Troubleshooting
+
+### No Services Found
+
+If you see "No services found" when trying to start services:
+
+1. **Check if dmn.json exists**: Ensure you have a `dmn.json` file in your workspace root
+   - Use the command palette: "OpenDaemon: Create Configuration" to create one
+   - Or manually create the file with at least one service defined
+
+2. **Verify services are defined**: Open your `dmn.json` and ensure the `services` object is not empty:
+   ```json
+   {
+     "version": "1.0",
+     "services": {
+       "my-service": {
+         "command": "npm start"
+       }
+     }
+   }
+   ```
+
+3. **Check JSON syntax**: Ensure your `dmn.json` is valid JSON (no trailing commas, proper quotes)
+
+4. **Reload the window**: Try reloading VS Code with "Developer: Reload Window" from the command palette
+
+5. **Check the Output panel**: Look for error messages in the "OpenDaemon" output channel
+
+### Service Timeout Errors
+
+If services are timing out before they're ready:
+
+1. **Increase the timeout**: Add a `timeout_seconds` field to your ready condition:
+   ```json
+   {
+     "ready_when": {
+       "log_contains": "Server ready",
+       "timeout_seconds": 120
+     }
+   }
+   ```
+
+2. **Verify the ready condition**: Check that your log pattern or URL is correct
+   - View the service logs in the Output panel to see what's actually being logged
+   - Test your regex pattern at regex101.com
+   - For URL checks, verify the URL is accessible from your machine
+
+3. **Check service logs**: When a timeout occurs, the error message includes the last few log lines
+   - Look for error messages or unexpected output
+   - Ensure the service is actually starting (not failing immediately)
+
+4. **Simplify the pattern**: Try a simpler ready condition first:
+   ```json
+   {
+     "ready_when": {
+       "log_contains": "ready"
+     }
+   }
+   ```
+
+5. **Common timeout values**:
+   - Fast services (Redis, simple scripts): 30-60 seconds (default)
+   - Medium services (Node.js apps, Python servers): 60-90 seconds
+   - Slow services (databases, Docker containers): 90-180 seconds
+   - Very slow services (large builds, complex initialization): 180+ seconds
 
 ### Services Won't Start
 
@@ -275,7 +385,7 @@ Your AI agent can then call:
 1. Verify the log pattern or URL is correct
 2. Check the service logs to see what's actually being output
 3. Try using a simpler pattern first
-4. Increase timeout if needed (future feature)
+4. Increase timeout using `timeout_seconds` if needed
 
 ### Extension Not Detecting dmn.json
 

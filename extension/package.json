@@ -55,6 +55,12 @@
         "title": "Show Logs",
         "category": "OpenDaemon",
         "icon": "$(output)"
+      },
+      {
+        "command": "opendaemon.refresh",
+        "title": "Refresh Services",
+        "category": "OpenDaemon",
+        "icon": "$(refresh)"
       }
     ],
     "views": {
@@ -76,6 +82,11 @@
           "command": "opendaemon.stopAll",
           "when": "view == opendaemon.services",
           "group": "navigation@2"
+        },
+        {
+          "command": "opendaemon.refresh",
+          "when": "view == opendaemon.services",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

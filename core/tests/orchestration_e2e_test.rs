@@ -131,6 +131,7 @@ async fn test_dependency_waiting() {
             depends_on: vec![],
             ready_when: Some(ReadyCondition::LogContains {
                 pattern: "ready on port".to_string(),
+                timeout_seconds: None,
             }),
             env_file: None,
         },
@@ -547,4 +548,82 @@ async fn test_event_emission() {
     // Events should have been emitted (we can't easily verify without more complex setup)
     // But at least verify the service started
     assert!(wait_for_ready(&orchestrator, "test_service", 5).await);
+}
+
+
+#[tokio::test]
+async fn test_custom_timeout_configuration() {
+    // Test that custom timeout_seconds from config is respected
+    // Requirements: 3.1, 3.2, 3.4, 3.5
+    
+    let mut services = HashMap::new();
+    
+    // Service with custom 2-second timeout that will succeed
+    services.insert(
+        "quick_service".to_string(),
+        ServiceConfig {
+            command: if cfg!(windows) {
+                "cmd /c echo Starting && timeout /t 1 && echo Service ready".to_string()
+            } else {
+                "sh -c 'echo Starting && sleep 1 && echo Service ready'".to_string()
+            },
+            depends_on: vec![],
+            ready_when: Some(ReadyCondition::LogContains {
+                pattern: "Service ready".to_string(),
+                timeout_seconds: Some(5), // Custom 5-second timeout
+            }),
+            env_file: None,
+        },
+    );
+    
+    // Service with no custom timeout (should use default 60 seconds)
+    services.insert(
+        "default_timeout_service".to_string(),
+        ServiceConfig {
+            command: if cfg!(windows) {
+                "cmd /c echo Starting && echo Default ready".to_string()
+            } else {
+                "sh -c 'echo Starting && echo Default ready'".to_string()
+            },
+            depends_on: vec![],
+            ready_when: Some(ReadyCondition::LogContains {
+                pattern: "Default ready".to_string(),
+                timeout_seconds: None, // No custom timeout, should use default
+            }),
+            env_file: None,
+        },
+    );
+    
+    let config = DmnConfig {
+        version: "1.0".to_string(),
+        services,
+    };
+    
+    let mut orchestrator = Orchestrator::new(config).unwrap();
+    
+    // Start both services
+    let result = orchestrator.start_service_with_deps("quick_service").await;
+    assert!(result.is_ok(), "Quick service should start successfully");
+    
+    let result = orchestrator.start_service_with_deps("default_timeout_service").await;
+    assert!(result.is_ok(), "Default timeout service should start successfully");
+    
+    // Wait for services to be ready
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    
+    // Verify both services became ready
+    assert!(wait_for_ready(&orchestrator, "quick_service", 5).await, 
+        "Quick service should be ready within custom timeout");
+    assert!(wait_for_ready(&orchestrator, "default_timeout_service", 5).await, 
+        "Default timeout service should be ready");
+    
+    // Verify logs show the services started
+    let log_buffer = orchestrator.log_buffer.lock().await;
+    let quick_logs = log_buffer.get_all_lines("quick_service");
+    assert!(quick_logs.iter().any(|l| l.content.contains("Service ready")), 
+        "Quick service logs should contain ready message");
+    
+    let default_logs = log_buffer.get_all_lines("default_timeout_service");
+    assert!(default_logs.iter().any(|l| l.content.contains("Default ready")), 
+        "Default timeout service logs should contain ready message");
 }

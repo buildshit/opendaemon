@@ -35,7 +35,7 @@ type PendingRequest = {
 export class RpcClient extends EventEmitter {
     private nextId = 1;
     private pendingRequests = new Map<number, PendingRequest>();
-    private readonly requestTimeout = 30000; // 30 seconds
+    private readonly requestTimeout = 120000; // 120 seconds
 
     constructor(private readonly write: (data: string) => void) {
         super();
@@ -46,7 +46,7 @@ export class RpcClient extends EventEmitter {
      */
     async request(method: string, params?: unknown): Promise<unknown> {
         const id = this.nextId++;
-        
+
         const request: RpcRequest = {
             jsonrpc: '2.0',
             id,
@@ -110,7 +110,7 @@ export class RpcClient extends EventEmitter {
      */
     private handleResponse(response: RpcResponse): void {
         const pending = this.pendingRequests.get(response.id);
-        
+
         if (!pending) {
             console.warn('Received response for unknown request:', response.id);
             return;
@@ -144,9 +144,9 @@ export class RpcClient extends EventEmitter {
         }
 
         const msg = message as Record<string, unknown>;
-        
-        return msg.jsonrpc === '2.0' && 
-               (typeof msg.id === 'number' || typeof msg.method === 'string');
+
+        return msg.jsonrpc === '2.0' &&
+            (typeof msg.id === 'number' || typeof msg.method === 'string');
     }
 
     /**

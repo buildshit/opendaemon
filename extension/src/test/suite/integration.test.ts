@@ -27,6 +27,94 @@ suite('Extension Integration Tests', () => {
         }
     });
 
+    test('Service Discovery: Services loaded from config before daemon starts', async function() {
+        this.timeout(10000);
+
+        // Create a test configuration with multiple services
+        const testConfig = {
+            version: '1.0',
+            services: {
+                database: {
+                    command: 'cmd /c echo Database starting && timeout /t 5'
+                },
+                backend: {
+                    command: 'cmd /c echo Backend starting && timeout /t 5',
+                    depends_on: ['database']
+                },
+                frontend: {
+                    command: 'cmd /c echo Frontend starting && timeout /t 5',
+                    depends_on: ['backend']
+                }
+            }
+        };
+
+        fs.writeFileSync(testConfigPath, JSON.stringify(testConfig, null, 2));
+
+        // Create tree data provider (simulating extension activation)
+        const treeDataProvider = new ServiceTreeDataProvider(() => null);
+
+        // Simulate loadServicesFromConfig function
+        const configContent = await fs.promises.readFile(testConfigPath, 'utf-8');
+        const config = JSON.parse(configContent) as { services?: Record<string, unknown> };
+
+        assert.ok(config.services, 'Config should have services object');
+
+        const serviceNames = Object.keys(config.services);
+        const services = serviceNames.map(name => ({
+            name,
+            status: ServiceStatus.NotStarted
+        }));
+
+        // Load services into tree view BEFORE daemon starts
+        treeDataProvider.updateServices(services);
+
+        // Verify tree view is populated
+        const treeItems = treeDataProvider.getChildren();
+        assert.strictEqual(treeItems.length, 3, 'Tree view should have 3 services');
+
+        // Verify all services are present
+        const serviceNamesInTree = treeItems.map(item => item.serviceName).sort();
+        assert.deepStrictEqual(
+            serviceNamesInTree,
+            ['backend', 'database', 'frontend'],
+            'All services should be in tree view'
+        );
+
+        // Verify all services have NotStarted status
+        for (const item of treeItems) {
+            assert.strictEqual(
+                item.status,
+                ServiceStatus.NotStarted,
+                `Service ${item.serviceName} should have NotStarted status`
+            );
+            assert.strictEqual(
+                item.description,
+                'NotStarted',
+                `Service ${item.serviceName} should display NotStarted`
+            );
+        }
+
+        // Verify services can be retrieved individually
+        const dbService = treeDataProvider.getService('database');
+        assert.ok(dbService, 'Database service should be retrievable');
+        assert.strictEqual(dbService.name, 'database');
+        assert.strictEqual(dbService.status, ServiceStatus.NotStarted);
+
+        const backendService = treeDataProvider.getService('backend');
+        assert.ok(backendService, 'Backend service should be retrievable');
+        assert.strictEqual(backendService.name, 'backend');
+        assert.strictEqual(backendService.status, ServiceStatus.NotStarted);
+
+        const frontendService = treeDataProvider.getService('frontend');
+        assert.ok(frontendService, 'Frontend service should be retrievable');
+        assert.strictEqual(frontendService.name, 'frontend');
+        assert.strictEqual(frontendService.status, ServiceStatus.NotStarted);
+
+        // Verify getAllServices returns all services
+        const allServices = treeDataProvider.getAllServices();
+        assert.strictEqual(allServices.length, 3, 'getAllServices should return 3 services');
+    });
+
     // Helper to start daemon and get RPC client
     async function startDaemonWithClient(daemon: DmnDaemon): Promise<RpcClient> {
         return new Promise((resolve, reject) => {

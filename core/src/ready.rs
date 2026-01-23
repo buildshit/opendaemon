@@ -9,8 +9,14 @@ use tokio::time::timeout;
 
 #[derive(Debug, Error)]
 pub enum ReadyError {
-    #[error("Timeout waiting for service '{0}' to be ready")]
-    Timeout(String),
+    #[error("Timeout waiting for service '{service}' to be ready after {timeout_secs} seconds.\nCondition: {condition}\n{details}{troubleshooting}")]
+    Timeout {
+        service: String,
+        timeout_secs: u64,
+        condition: String,
+        details: String,
+        troubleshooting: String,
+    },
     #[error("Invalid regex pattern: {0}")]
     InvalidRegex(#[from] regex::Error),
     #[error("HTTP request failed: {0}")]
@@ -87,17 +93,20 @@ impl ReadyWatcher {
         let timeout_duration = custom_timeout.unwrap_or(self.default_timeout);
 
         match condition {
-            ReadyCondition::LogContains { pattern } => {
+            ReadyCondition::LogContains { pattern, timeout_seconds: _ } => {
                 if let Some(rx) = log_rx {
                     self.watch_log_pattern_with_timeout(service_name, pattern, rx, timeout_duration).await
                 } else {
-                    Err(ReadyError::Timeout(format!(
-                        "No log receiver provided for service '{}'",
-                        service_name
-                    )))
+                    Err(ReadyError::Timeout {
+                        service: service_name.clone(),
+                        timeout_secs: timeout_duration.as_secs(),
+                        condition: format!("log_contains pattern: '{}'", pattern),
+                        details: "No log receiver provided for service.\n".to_string(),
+                        troubleshooting: "This is an internal error. The service was configured with a log_contains ready condition but no log stream was provided.".to_string(),
+                    })
                 }
             }
-            ReadyCondition::UrlResponds { url } => {
+            ReadyCondition::UrlResponds { url, timeout_seconds: _ } => {
                 self.watch_url_with_timeout(service_name, url, timeout_duration).await
             }
         }
@@ -120,14 +129,37 @@ impl ReadyWatcher {
         timeout_duration: Duration,
     ) -> Result<(), ReadyError> {
         let regex = Regex::new(&pattern)?;
+        let mut collected_logs: Vec<String> = Vec::new();
         
         let result = timeout(timeout_duration, async {
             while let Some(line) = log_rx.recv().await {
+                // Keep last 10 log lines for error reporting
+                collected_logs.push(line.content.clone());
+                if collected_logs.len() > 10 {
+                    collected_logs.remove(0);
+                }
+                
                 if regex.is_match(&line.content) {
                     return Ok(());
                 }
             }
-            Err(ReadyError::Timeout(service_name.clone()))
+            Err(ReadyError::Timeout {
+                service: service_name.clone(),
+                timeout_secs: timeout_duration.as_secs(),
+                condition: format!("log_contains pattern: '{}'", pattern),
+                details: if !collected_logs.is_empty() {
+                    format!("Last {} log lines:\n{}\n", 
+                        collected_logs.len(),
+                        collected_logs.iter()
+                            .map(|l| format!("  {}", l))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                } else {
+                    "No log output received.\n".to_string()
+                },
+                troubleshooting: "Troubleshooting:\n- Verify the service is producing log output\n- Check if the pattern matches the actual log format\n- Consider increasing the timeout_seconds in your dmn.json\n- Use a case-insensitive pattern with (?i) if needed".to_string(),
+            })
         })
         .await;
 
@@ -137,7 +169,26 @@ impl ReadyWatcher {
                 Ok(())
             }
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(ReadyError::Timeout(service_name)),
+            Err(_) => {
+                // Timeout occurred
+                Err(ReadyError::Timeout {
+                    service: service_name,
+                    timeout_secs: timeout_duration.as_secs(),
+                    condition: format!("log_contains pattern: '{}'", pattern),
+                    details: if !collected_logs.is_empty() {
+                        format!("Last {} log lines:\n{}\n", 
+                            collected_logs.len(),
+                            collected_logs.iter()
+                                .map(|l| format!("  {}", l))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    } else {
+                        "No log output received.\n".to_string()
+                    },
+                    troubleshooting: "Troubleshooting:\n- Verify the service is producing log output\n- Check if the pattern matches the actual log format\n- Consider increasing the timeout_seconds in your dmn.json\n- Use a case-insensitive pattern with (?i) if needed".to_string(),
+                })
+            }
         }
     }
 
@@ -157,17 +208,24 @@ impl ReadyWatcher {
     ) -> Result<(), ReadyError> {
         let client = reqwest::Client::new();
         let poll_interval = Duration::from_millis(500);
+        let mut last_error: Option<String> = None;
+        let mut attempt_count = 0;
 
         let result = timeout(timeout_duration, async {
             loop {
+                attempt_count += 1;
                 match client.get(&url).send().await {
                     Ok(response) if response.status().is_success() => {
                         return Ok(());
                     }
-                    _ => {
-                        tokio::time::sleep(poll_interval).await;
+                    Ok(response) => {
+                        last_error = Some(format!("HTTP {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown")));
+                    }
+                    Err(e) => {
+                        last_error = Some(format!("{}", e));
                     }
                 }
+                tokio::time::sleep(poll_interval).await;
             }
         })
         .await;
@@ -178,7 +236,22 @@ impl ReadyWatcher {
                 Ok(())
             }
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(ReadyError::Timeout(service_name)),
+            Err(_) => {
+                // Timeout occurred
+                let details = if let Some(err) = last_error {
+                    format!("Last error after {} attempts: {}\n", attempt_count, err)
+                } else {
+                    format!("Made {} attempts to connect.\n", attempt_count)
+                };
+                
+                Err(ReadyError::Timeout {
+                    service: service_name,
+                    timeout_secs: timeout_duration.as_secs(),
+                    condition: format!("url_responds: '{}'", url),
+                    details,
+                    troubleshooting: "Troubleshooting:\n- Verify the service is listening on the expected URL\n- Check if the service takes longer to start than the timeout\n- Ensure there are no firewall or network issues\n- Consider increasing the timeout_seconds in your dmn.json".to_string(),
+                })
+            }
         }
     }
 }
@@ -543,7 +616,7 @@ mod tests {
         // Test with invalid URL to verify timeout works
         let result = watcher.watch_url(service_name.clone(), "http://localhost:59999/nonexistent".to_string()).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ReadyError::Timeout(_)));
+        assert!(matches!(result.unwrap_err(), ReadyError::Timeout { .. }));
     }
 
     #[tokio::test]
@@ -726,7 +799,7 @@ mod tests {
 
         let result = handle.await.unwrap();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ReadyError::Timeout(_)));
+        assert!(matches!(result.unwrap_err(), ReadyError::Timeout { .. }));
     }
 
     #[tokio::test]
@@ -738,7 +811,7 @@ mod tests {
         let result = watcher.watch_url(service_name.clone(), "http://192.0.2.1:9999/health".to_string()).await;
         
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ReadyError::Timeout(_)));
+        assert!(matches!(result.unwrap_err(), ReadyError::Timeout { .. }));
         assert!(!watcher.is_ready(&service_name));
     }
 
@@ -752,7 +825,10 @@ mod tests {
 
         let service_name = "test_service".to_string();
         let pattern = "READY".to_string();
-        let condition = ReadyCondition::LogContains { pattern: pattern.clone() };
+        let condition = ReadyCondition::LogContains { 
+            pattern: pattern.clone(),
+            timeout_seconds: None,
+        };
         
         // Use a custom shorter timeout
         let handle = tokio::spawn(async move {
@@ -783,7 +859,7 @@ mod tests {
 
         let result = handle.await.unwrap();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ReadyError::Timeout(_)));
+        assert!(matches!(result.unwrap_err(), ReadyError::Timeout { .. }));
     }
 
     #[tokio::test]
@@ -796,7 +872,10 @@ mod tests {
 
         let service_name = "test_service".to_string();
         let pattern = "READY".to_string();
-        let condition = ReadyCondition::LogContains { pattern: pattern.clone() };
+        let condition = ReadyCondition::LogContains { 
+            pattern: pattern.clone(),
+            timeout_seconds: None,
+        };
         
         // Use a custom longer timeout
         let handle = tokio::spawn(async move {
@@ -840,8 +919,11 @@ mod tests {
         
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, ReadyError::Timeout(_)));
-        assert!(err.to_string().contains("my_service"));
+        assert!(matches!(err, ReadyError::Timeout { .. }));
+        let err_str = err.to_string();
+        assert!(err_str.contains("my_service"));
+        assert!(err_str.contains("url_responds"));
+        assert!(err_str.contains("Troubleshooting"));
     }
 
     #[tokio::test]
@@ -885,7 +967,10 @@ mod tests {
         let (tx1, rx1) = mpsc::channel(10);
         let service1 = "service1".to_string();
         let pattern1 = "READY".to_string();
-        let condition1 = ReadyCondition::LogContains { pattern: pattern1 };
+        let condition1 = ReadyCondition::LogContains { 
+            pattern: pattern1,
+            timeout_seconds: None,
+        };
 
         let handle1 = tokio::spawn(async move {
             watcher1.watch_service_with_timeout(
@@ -901,7 +986,10 @@ mod tests {
         let (tx2, rx2) = mpsc::channel(10);
         let service2 = "service2".to_string();
         let pattern2 = "READY".to_string();
-        let condition2 = ReadyCondition::LogContains { pattern: pattern2 };
+        let condition2 = ReadyCondition::LogContains { 
+            pattern: pattern2,
+            timeout_seconds: None,
+        };
 
         let handle2 = tokio::spawn(async move {
             watcher2.watch_service_with_timeout(

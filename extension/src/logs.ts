@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { RpcClient } from './rpc-client';
+import { LogDocumentProvider } from './log-document-provider';
 
 export interface LogLine {
     timestamp: string;
@@ -8,17 +9,15 @@ export interface LogLine {
 }
 
 export class LogManager {
-    private outputChannel: vscode.OutputChannel;
     private currentService: string | null = null;
 
     constructor(
-        private readonly getRpcClient: () => RpcClient | null
-    ) {
-        this.outputChannel = vscode.window.createOutputChannel('OpenDaemon');
-    }
+        private readonly getRpcClient: () => RpcClient | null,
+        private readonly logDocumentProvider: LogDocumentProvider
+    ) { }
 
     /**
-     * Show logs for a specific service
+     * Show logs for a specific service in an editor tab
      */
     async showLogs(serviceName: string, lines?: number): Promise<void> {
         const rpcClient = this.getRpcClient();
@@ -35,7 +34,18 @@ export class LogManager {
                 lines: lines || 'all'
             }) as { logs: LogLine[] };
 
-            this.displayLogs(serviceName, result.logs);
+            // Format logs and set them in the document provider
+            const formattedLines = result.logs.map(log => {
+                const prefix = log.stream === 'stderr' ? '[stderr]' : '[stdout]';
+                return `${log.timestamp} ${prefix} ${log.content}`;
+            });
+
+            this.logDocumentProvider.setLogs(serviceName, formattedLines);
+
+            // Open the log document in an editor tab
+            const uri = this.logDocumentProvider.createUri(serviceName);
+            const doc = await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(doc, { preview: false });
         } catch (err) {
             vscode.window.showErrorMessage(
                 `Failed to get logs for ${serviceName}: ${err instanceof Error ? err.message : String(err)}`
@@ -44,37 +54,21 @@ export class LogManager {
     }
 
     /**
-     * Display logs in the output channel
-     */
-    private displayLogs(serviceName: string, logs: LogLine[]): void {
-        this.outputChannel.clear();
-        this.outputChannel.appendLine(`=== Logs for ${serviceName} ===`);
-        this.outputChannel.appendLine('');
-
-        for (const log of logs) {
-            const prefix = log.stream === 'stderr' ? '[stderr]' : '[stdout]';
-            this.outputChannel.appendLine(`${log.timestamp} ${prefix} ${log.content}`);
-        }
-
-        this.outputChannel.show();
-    }
-
-    /**
      * Append a log line in real-time
      */
     appendLogLine(serviceName: string, log: LogLine): void {
-        // Only append if we're currently viewing this service's logs
-        if (this.currentService === serviceName) {
-            const prefix = log.stream === 'stderr' ? '[stderr]' : '[stdout]';
-            this.outputChannel.appendLine(`${log.timestamp} ${prefix} ${log.content}`);
-        }
+        const prefix = log.stream === 'stderr' ? '[stderr]' : '[stdout]';
+        const formattedLine = `${log.timestamp} ${prefix} ${log.content}`;
+        this.logDocumentProvider.appendLog(serviceName, formattedLine);
     }
 
     /**
-     * Clear the output channel
+     * Clear logs for a service
      */
-    clear(): void {
-        this.outputChannel.clear();
+    clear(serviceName?: string): void {
+        if (serviceName) {
+            this.logDocumentProvider.clearLogs(serviceName);
+        }
         this.currentService = null;
     }
 
@@ -82,6 +76,6 @@ export class LogManager {
      * Dispose of resources
      */
     dispose(): void {
-        this.outputChannel.dispose();
+        // LogDocumentProvider is disposed separately via context.subscriptions
     }
 }

@@ -26,6 +26,7 @@ pub enum McpError {
 pub struct McpTool {
     pub name: String,
     pub description: String,
+    #[serde(rename = "inputSchema")]
     pub input_schema: Value,
 }
 
@@ -115,6 +116,7 @@ impl DmnMcpServer {
 
     /// Get the list of available tools
     pub fn get_tools(&self) -> Vec<McpTool> {
+        // Always return tools list - authentication is checked per tool call
         vec![
             McpTool {
                 name: "read_logs".to_string(),
@@ -307,6 +309,33 @@ impl DmnMcpServer {
     /// Handle an MCP request
     pub async fn handle_request(&self, request: McpRequest) -> McpResponse {
         match request.method.as_str() {
+            "initialize" => {
+                // MCP initialization handshake
+                McpResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: Some(json!({
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {}
+                        },
+                        "serverInfo": {
+                            "name": "opendaemon",
+                            "version": "1.0.0"
+                        }
+                    })),
+                    error: None,
+                }
+            }
+            "notifications/initialized" => {
+                // Client confirms initialization - no response needed for notifications
+                McpResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: request.id,
+                    result: Some(json!({})),
+                    error: None,
+                }
+            }
             "tools/list" => {
                 let tools = self.get_tools();
                 McpResponse {

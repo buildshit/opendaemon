@@ -21,6 +21,7 @@ fn create_test_config() -> DmnConfig {
             depends_on: vec![],
             ready_when: Some(ReadyCondition::LogContains {
                 pattern: "ready".to_string(),
+                timeout_seconds: None,
             }),
             env_file: None,
         },
@@ -37,6 +38,7 @@ fn create_test_config() -> DmnConfig {
             depends_on: vec!["database".to_string()],
             ready_when: Some(ReadyCondition::LogContains {
                 pattern: "listening".to_string(),
+                timeout_seconds: None,
             }),
             env_file: None,
         },

@@ -1,11 +1,31 @@
 {
     "version": "1.0",
     "services": {
-        "test-service": {
-            "command": "echo 'Hello OpenDaemon'",
+        "database": {
+            "command": "node -e \"console.log('Initializing DB...'); setTimeout(() => { console.log('Database Ready on port 5432'); setInterval(() => console.log('DB heartbeat...'), 5000); }, 2000);\"",
             "ready_when": {
                 "type": "log_contains",
-                "pattern": "Hello"
+                "pattern": "Database Ready"
+            }
+        },
+        "backend-api": {
+            "command": "node -e \"console.log('Starting API...'); console.log('Connecting to database...'); setTimeout(() => { console.log('API Server running on port 8080'); setInterval(() => console.log('Handling requests...'), 3000); }, 1500);\"",
+            "depends_on": [
+                "database"
+            ],
+            "ready_when": {
+                "type": "log_contains",
+                "pattern": "API Server running"
+            }
+        },
+        "frontend": {
+            "command": "node -e \"console.log('Starting Frontend...'); console.log('Waiting for API...'); setTimeout(() => { console.log('Frontend available at http://localhost:3000'); setInterval(() => {}, 10000); }, 1000);\"",
+            "depends_on": [
+                "backend-api"
+            ],
+            "ready_when": {
+                "type": "log_contains",
+                "pattern": "Frontend available"
             }
         }
     }

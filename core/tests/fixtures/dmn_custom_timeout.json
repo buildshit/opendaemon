@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "echo 'Database starting...' && sleep 3 && echo 'Database ready'",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "Database ready",
+        "timeout_seconds": 10
+      }
+    },
+    "api": {
+      "command": "echo 'API starting...' && sleep 2 && echo 'API listening on port 8080'",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "API listening",
+        "timeout_seconds": 15
+      }
+    },
+    "web": {
+      "command": "python -m http.server 8000",
+      "ready_when": {
+        "type": "url_responds",
+        "url": "http://localhost:8000",
+        "timeout_seconds": 30
+      }
+    },
+    "worker": {
+      "command": "echo 'Worker starting...' && sleep 1 && echo 'Worker ready'",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "Worker ready"
+      }
+    }
+  }
+}

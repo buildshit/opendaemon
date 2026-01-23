@@ -2,6 +2,15 @@
 
 OpenDaemon includes a Model Context Protocol (MCP) server that allows AI coding assistants to read service logs and status information. This enables AI agents to help debug issues by analyzing runtime output from your development services.
 
+## 📚 Documentation
+
+**Choose your path:**
+
+- **🚀 [Quick Start Guide](MCP_QUICK_START.md)** - Get started in 5 minutes
+- **✅ [Setup Checklist](MCP_SETUP_CHECKLIST.md)** - Step-by-step checklist  
+- **🔧 [Troubleshooting Guide](MCP_TROUBLESHOOTING.md)** - Fix common issues
+- **📖 This document** - Complete technical reference
+
 ## Table of Contents
 
 - [Overview](#overview)

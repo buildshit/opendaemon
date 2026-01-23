@@ -1,10 +1,12 @@
 import * as assert from 'assert';
 import { LogManager, LogLine } from '../../logs';
 import { RpcClient } from '../../rpc-client';
+import { LogDocumentProvider } from '../../log-document-provider';
 
 suite('Log Manager Test Suite', () => {
     let logManager: LogManager;
     let mockRpcClient: RpcClient | null;
+    let mockLogDocumentProvider: LogDocumentProvider;
 
     setup(() => {
         mockRpcClient = {
@@ -29,7 +31,16 @@ suite('Log Manager Test Suite', () => {
             }
         } as unknown as RpcClient;
 
-        logManager = new LogManager(() => mockRpcClient);
+        // Create a mock LogDocumentProvider
+        mockLogDocumentProvider = {
+            setLogs: () => { },
+            appendLog: () => { },
+            clearLogs: () => { },
+            createUri: (serviceName: string) => ({ scheme: 'opendaemon-log', path: `/${serviceName}.log` }),
+            dispose: () => { }
+        } as unknown as LogDocumentProvider;
+
+        logManager = new LogManager(() => mockRpcClient, mockLogDocumentProvider);
     });
 
     teardown(() => {
@@ -48,7 +59,7 @@ suite('Log Manager Test Suite', () => {
 
     test('Should handle RPC client not available', async () => {
         mockRpcClient = null;
-        
+
         // Should not throw
         await logManager.showLogs('test-service');
         assert.ok(true);

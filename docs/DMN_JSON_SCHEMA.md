@@ -179,8 +179,8 @@ Ready conditions define how OpenDaemon determines when a service is ready to acc
 
 ```typescript
 type ReadyCondition = 
-  | { log_contains: string }
-  | { url_responds: string };
+  | { log_contains: string; timeout_seconds?: number }
+  | { url_responds: string; timeout_seconds?: number };
 ```
 
 ### Log Pattern Matching
@@ -195,6 +195,17 @@ Wait for a specific pattern to appear in the service's stdout or stderr.
 }
 ```
 
+With custom timeout:
+
+```json
+{
+  "ready_when": {
+    "log_contains": "pattern",
+    "timeout_seconds": 120
+  }
+}
+```
+
 #### Properties
 
 - **`log_contains`**: `string`
@@ -203,6 +214,12 @@ Wait for a specific pattern to appear in the service's stdout or stderr.
   - Case-sensitive by default
   - Matches against each line of output
 
+- **`timeout_seconds`**: `number` (optional)
+  - Maximum time to wait for the ready condition (in seconds)
+  - Default: 60 seconds
+  - Minimum: 1 second
+  - Use higher values for slow-starting services
+
 #### Examples
 
 **Simple string match:**
@@ -210,6 +227,16 @@ Wait for a specific pattern to appear in the service's stdout or stderr.
 {
   "ready_when": {
     "log_contains": "Server started on port 3000"
+  }
+}
+```
+
+**With custom timeout:**
+```json
+{
+  "ready_when": {
+    "log_contains": "Server started on port 3000",
+    "timeout_seconds": 90
   }
 }
 ```
@@ -297,13 +324,30 @@ Poll a URL until it returns a successful HTTP response.
 }
 ```
 
+With custom timeout:
+
+```json
+{
+  "ready_when": {
+    "url_responds": "http://localhost:3000/health",
+    "timeout_seconds": 120
+  }
+}
+```
+
 #### Properties
 
 - **`url_responds`**: `string`
   - Full URL to poll (must include protocol)
   - Polls every 500ms
   - Considers 2xx and 3xx status codes as success
-  - Timeout after reasonable period (configurable in future)
+  - Default timeout: 60 seconds
+
+- **`timeout_seconds`**: `number` (optional)
+  - Maximum time to wait for the URL to respond (in seconds)
+  - Default: 60 seconds
+  - Minimum: 1 second
+  - Use higher values for services with slow startup
 
 #### Examples
 
@@ -312,6 +356,16 @@ Poll a URL until it returns a successful HTTP response.
 {
   "ready_when": {
     "url_responds": "http://localhost:3000/health"
+  }
+}
+```
+
+**With custom timeout:**
+```json
+{
+  "ready_when": {
+    "url_responds": "http://localhost:3000/health",
+    "timeout_seconds": 90
   }
 }
 ```
@@ -339,8 +393,94 @@ Poll a URL until it returns a successful HTTP response.
 - Polls the URL every 500ms
 - Accepts any 2xx or 3xx HTTP status code
 - Ignores connection errors (keeps retrying)
-- Times out after a reasonable period (future: configurable)
+- Default timeout: 60 seconds (configurable via `timeout_seconds`)
 - Does not follow redirects by default
+
+## Timeout Configuration
+
+Both `log_contains` and `url_responds` ready conditions support an optional `timeout_seconds` field to customize how long OpenDaemon waits for a service to become ready.
+
+### Default Timeout
+
+If `timeout_seconds` is not specified, the default timeout is **60 seconds**.
+
+### Custom Timeout Examples
+
+**Slow-starting database:**
+```json
+{
+  "services": {
+    "postgres": {
+      "command": "docker run --rm -p 5432:5432 postgres:15",
+      "ready_when": {
+        "log_contains": "database system is ready",
+        "timeout_seconds": 120
+      }
+    }
+  }
+}
+```
+
+**Service with long initialization:**
+```json
+{
+  "services": {
+    "ml-service": {
+      "command": "python train.py",
+      "ready_when": {
+        "log_contains": "Model loaded",
+        "timeout_seconds": 300
+      }
+    }
+  }
+}
+```
+
+**Fast service with short timeout:**
+```json
+{
+  "services": {
+    "redis": {
+      "command": "redis-server",
+      "ready_when": {
+        "log_contains": "Ready to accept connections",
+        "timeout_seconds": 30
+      }
+    }
+  }
+}
+```
+
+### Recommended Timeout Values
+
+- **Fast services** (Redis, simple scripts): 30-60 seconds
+- **Medium services** (Node.js apps, Python servers): 60-90 seconds  
+- **Slow services** (databases, Docker containers): 90-180 seconds
+- **Very slow services** (large builds, ML models): 180+ seconds
+
+### Timeout Error Messages
+
+When a service times out, OpenDaemon provides detailed error information:
+
+- Service name that timed out
+- The ready condition that was being waited for
+- The last few log lines from the service (for `log_contains` conditions)
+- Troubleshooting suggestions
+
+Example timeout error:
+```
+Service 'backend' timed out after 60 seconds waiting for ready condition.
+Condition: log_contains "Server listening"
+Last log lines:
+  [INFO] Loading configuration...
+  [INFO] Connecting to database...
+  [ERROR] Connection refused
+
+Troubleshooting:
+- Check if the ready condition pattern is correct
+- Increase timeout_seconds if the service needs more time
+- Review the service logs for errors
+```
 
 ## Examples
 
@@ -618,6 +758,11 @@ For IDE integration and validation, use this JSON Schema:
                     "log_contains": {
                       "type": "string",
                       "description": "Regex pattern to match in logs"
+                    },
+                    "timeout_seconds": {
+                      "type": "number",
+                      "minimum": 1,
+                      "description": "Maximum time to wait for ready condition (default: 60)"
                     }
                   },
                   "additionalProperties": false
@@ -630,6 +775,11 @@ For IDE integration and validation, use this JSON Schema:
                       "type": "string",
                       "format": "uri",
                       "description": "URL to poll for readiness"
+                    },
+                    "timeout_seconds": {
+                      "type": "number",
+                      "minimum": 1,
+                      "description": "Maximum time to wait for ready condition (default: 60)"
                     }
                   },
                   "additionalProperties": false
@@ -651,6 +801,369 @@ For IDE integration and validation, use this JSON Schema:
   "additionalProperties": false
 }
 ```
+
+## Troubleshooting
+
+### "No Services Found" Error
+
+This error occurs when OpenDaemon cannot find or load services from your configuration.
+
+#### Possible Causes and Solutions
+
+**1. Missing dmn.json file**
+
+Error: `No dmn.json file found in workspace`
+
+Solution:
+- Create a `dmn.json` file in your workspace root
+- Use the command palette: "OpenDaemon: Create Configuration"
+- Ensure the file is named exactly `dmn.json` (not `dmn.json.txt` or similar)
+
+**2. Empty services object**
+
+Your `dmn.json` exists but has no services defined:
+
+```json
+{
+  "version": "1.0",
+  "services": {}
+}
+```
+
+Solution: Add at least one service:
+```json
+{
+  "version": "1.0",
+  "services": {
+    "my-service": {
+      "command": "npm start"
+    }
+  }
+}
+```
+
+**3. Invalid JSON syntax**
+
+Common JSON errors:
+- Trailing commas
+- Missing quotes around keys
+- Unclosed brackets or braces
+
+Solution: Validate your JSON using:
+- VS Code's built-in JSON validation
+- Online JSON validators
+- The error message in the OpenDaemon output panel
+
+**4. Tree view not initialized**
+
+The extension's tree view may not be properly initialized.
+
+Solution:
+- Reload the VS Code window: "Developer: Reload Window"
+- Check the OpenDaemon output panel for initialization errors
+- Ensure the extension is activated (check Extensions panel)
+
+**5. File in wrong location**
+
+The `dmn.json` file must be in the workspace root, not in a subdirectory.
+
+Solution:
+```
+✅ Correct:
+/my-project/dmn.json
+
+❌ Incorrect:
+/my-project/config/dmn.json
+/my-project/src/dmn.json
+```
+
+### Timeout Errors
+
+Services timing out before becoming ready is a common issue, especially for slow-starting services.
+
+#### Understanding Timeout Errors
+
+When a service times out, you'll see an error like:
+
+```
+Service 'database' timed out after 60 seconds waiting for ready condition.
+Condition: log_contains "ready to accept connections"
+```
+
+#### Common Causes and Solutions
+
+**1. Service needs more time to start**
+
+Some services (databases, Docker containers, ML models) take longer than the default 60 seconds.
+
+Solution: Increase the timeout:
+```json
+{
+  "ready_when": {
+    "log_contains": "ready to accept connections",
+    "timeout_seconds": 120
+  }
+}
+```
+
+**2. Incorrect ready condition pattern**
+
+The log pattern or URL doesn't match what the service actually outputs.
+
+Solution:
+- Check the service logs in the Output panel
+- Copy the exact text from the logs
+- Test regex patterns at regex101.com
+- Start with a simple substring match before using regex
+
+Example - Too specific:
+```json
+{
+  "ready_when": {
+    "log_contains": "Server listening on port 3000"
+  }
+}
+```
+
+Better - More flexible:
+```json
+{
+  "ready_when": {
+    "log_contains": "Server listening"
+  }
+}
+```
+
+**3. Service is failing to start**
+
+The service may be crashing or encountering errors before it becomes ready.
+
+Solution:
+- Check the last few log lines in the timeout error message
+- View full logs in the Output panel
+- Look for error messages or stack traces
+- Verify the command is correct
+- Check environment variables and dependencies
+
+**4. URL not accessible**
+
+For `url_responds` conditions, the URL may not be reachable.
+
+Solution:
+- Verify the URL is correct (including protocol: `http://` or `https://`)
+- Check the port number matches your service
+- Ensure the service is binding to the correct interface (0.0.0.0 vs localhost)
+- Test the URL manually with curl or a browser
+
+**5. Service outputs to stderr instead of stdout**
+
+Some services log to stderr, which OpenDaemon monitors, but the pattern might not match.
+
+Solution:
+- Check both stdout and stderr in the logs
+- Adjust your pattern to match the actual output
+- Consider using a URL health check instead
+
+#### Timeout Troubleshooting Checklist
+
+When debugging timeout issues:
+
+1. ✅ Check the service logs in the Output panel
+2. ✅ Verify the ready condition matches actual output
+3. ✅ Test the service command manually in a terminal
+4. ✅ Increase timeout_seconds if needed
+5. ✅ Simplify the ready condition pattern
+6. ✅ Check for service errors or crashes
+7. ✅ Verify dependencies are running
+8. ✅ Test URLs manually with curl
+
+#### Timeout Best Practices
+
+**Use appropriate timeout values:**
+
+```json
+{
+  "services": {
+    "redis": {
+      "command": "redis-server",
+      "ready_when": {
+        "log_contains": "Ready to accept connections",
+        "timeout_seconds": 30
+      }
+    },
+    "postgres": {
+      "command": "docker run --rm postgres:15",
+      "ready_when": {
+        "log_contains": "database system is ready",
+        "timeout_seconds": 120
+      }
+    },
+    "ml-model": {
+      "command": "python load_model.py",
+      "ready_when": {
+        "log_contains": "Model loaded successfully",
+        "timeout_seconds": 300
+      }
+    }
+  }
+}
+```
+
+**Prefer URL health checks for HTTP services:**
+
+```json
+{
+  "ready_when": {
+    "url_responds": "http://localhost:3000/health",
+    "timeout_seconds": 90
+  }
+}
+```
+
+This is more reliable than log pattern matching for web services.
+
+### Service Won't Start
+
+If a service fails to start at all (not a timeout issue):
+
+**1. Command not found**
+
+Error: `command not found` or similar
+
+Solution:
+- Ensure the executable is in your PATH
+- Use absolute paths if needed
+- Verify the command works in a terminal
+- Check for typos in the command
+
+**2. Permission denied**
+
+Error: `Permission denied`
+
+Solution:
+- Make scripts executable: `chmod +x script.sh`
+- Check file permissions
+- Run VS Code with appropriate permissions
+
+**3. Working directory issues**
+
+The command may expect to run from a specific directory.
+
+Solution:
+- Commands run from the workspace root
+- Use `cd` in your command if needed: `cd subdir && npm start`
+- Use relative paths correctly
+
+**4. Missing dependencies**
+
+The service may depend on other services that aren't running.
+
+Solution:
+- Check the `depends_on` field
+- Ensure dependencies are defined and starting correctly
+- Look for circular dependencies
+
+**5. Environment variables missing**
+
+The service may need specific environment variables.
+
+Solution:
+- Use the `env_file` field:
+```json
+{
+  "command": "npm start",
+  "env_file": ".env.local"
+}
+```
+
+- Verify the env file exists and has correct format
+- Check for required variables
+
+### Circular Dependency Errors
+
+Error: `Circular dependency detected: a → b → c → a`
+
+This means services depend on each other in a loop.
+
+Solution:
+- Review the dependency chain in the error message
+- Remove one dependency to break the cycle
+- Restructure services to avoid circular dependencies
+- Consider if all dependencies are truly necessary
+
+Example problem:
+```json
+{
+  "services": {
+    "service-a": {
+      "command": "...",
+      "depends_on": ["service-b"]
+    },
+    "service-b": {
+      "command": "...",
+      "depends_on": ["service-a"]
+    }
+  }
+}
+```
+
+Solution: Remove one dependency or add an intermediate service.
+
+### Configuration Validation Errors
+
+**Invalid service name**
+
+Error: `Invalid service name: 'my service'`
+
+Solution: Use only alphanumeric characters, hyphens, and underscores:
+```json
+{
+  "services": {
+    "my-service": { /* ... */ },
+    "my_service": { /* ... */ },
+    "myService123": { /* ... */ }
+  }
+}
+```
+
+**Invalid regex pattern**
+
+Error: `Invalid regex pattern in ready_when condition`
+
+Solution:
+- Test your regex at regex101.com
+- Escape special characters: `\\.`, `\\d`, `\\[`, etc.
+- Use raw strings or double-escape in JSON
+
+**Missing required fields**
+
+Error: `Missing required field: command`
+
+Solution: Ensure all required fields are present:
+```json
+{
+  "version": "1.0",
+  "services": {
+    "my-service": {
+      "command": "npm start"
+    }
+  }
+}
+```
+
+### Getting Help
+
+If you're still experiencing issues:
+
+1. **Check the Output panel**: Look for detailed error messages in the "OpenDaemon" output channel
+2. **Enable debug logging**: Check the extension logs for more details
+3. **Test manually**: Try running the service command directly in a terminal
+4. **Simplify**: Start with a minimal configuration and add complexity gradually
+5. **Report issues**: File a bug report with:
+   - Your `dmn.json` configuration
+   - Error messages from the Output panel
+   - Steps to reproduce the issue
+   - Your OS and VS Code version
 
 ## Best Practices
 

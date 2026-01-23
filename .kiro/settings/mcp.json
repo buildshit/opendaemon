@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "opendaemon": {
+      "command": "F:\\test apps\\opendaemon\\target\\release\\dmn.exe",
+      "args": ["mcp"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "list_services",
+        "get_service_status"
+      ],
+      "disabledTools": []
+    }
+  }
+}

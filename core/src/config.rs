@@ -54,18 +54,34 @@ impl fmt::Display for ServiceConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReadyCondition {
-    LogContains { pattern: String },
-    UrlResponds { url: String },
+    LogContains { 
+        pattern: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u64>
+    },
+    UrlResponds { 
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u64>
+    },
 }
 
 impl fmt::Display for ReadyCondition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReadyCondition::LogContains { pattern } => {
-                write!(f, "log_contains: '{}'", pattern)
+            ReadyCondition::LogContains { pattern, timeout_seconds } => {
+                write!(f, "log_contains: '{}'", pattern)?;
+                if let Some(timeout) = timeout_seconds {
+                    write!(f, " (timeout: {}s)", timeout)?;
+                }
+                Ok(())
             }
-            ReadyCondition::UrlResponds { url } => {
-                write!(f, "url_responds: '{}'", url)
+            ReadyCondition::UrlResponds { url, timeout_seconds } => {
+                write!(f, "url_responds: '{}'", url)?;
+                if let Some(timeout) = timeout_seconds {
+                    write!(f, " (timeout: {}s)", timeout)?;
+                }
+                Ok(())
             }
         }
     }
@@ -127,7 +143,7 @@ impl DmnConfig {
             // Validate ready_when conditions
             if let Some(ready) = &service.ready_when {
                 match ready {
-                    ReadyCondition::LogContains { pattern } => {
+                    ReadyCondition::LogContains { pattern, timeout_seconds } => {
                         if pattern.is_empty() {
                             return Err(ConfigError::Validation(format!(
                                 "service '{}': log_contains pattern cannot be empty",
@@ -141,13 +157,31 @@ impl DmnConfig {
                                 name, pattern, e
                             )));
                         }
+                        // Validate timeout if specified
+                        if let Some(timeout) = timeout_seconds {
+                            if *timeout == 0 {
+                                return Err(ConfigError::Validation(format!(
+                                    "service '{}': timeout_seconds must be greater than 0",
+                                    name
+                                )));
+                            }
+                        }
                     }
-                    ReadyCondition::UrlResponds { url } => {
+                    ReadyCondition::UrlResponds { url, timeout_seconds } => {
                         if url.is_empty() {
                             return Err(ConfigError::Validation(format!(
                                 "service '{}': url_responds url cannot be empty",
                                 name
                             )));
+                        }
+                        // Validate timeout if specified
+                        if let Some(timeout) = timeout_seconds {
+                            if *timeout == 0 {
+                                return Err(ConfigError::Validation(format!(
+                                    "service '{}': timeout_seconds must be greater than 0",
+                                    name
+                                )));
+                            }
                         }
                     }
                 }
@@ -266,6 +300,7 @@ mod tests {
     fn test_ready_condition_log_contains_serialization() {
         let condition = ReadyCondition::LogContains {
             pattern: "Server started".to_string(),
+            timeout_seconds: None,
         };
         
         let json = serde_json::to_value(&condition).unwrap();
@@ -282,8 +317,9 @@ mod tests {
         
         let condition: ReadyCondition = serde_json::from_value(json).unwrap();
         match condition {
-            ReadyCondition::LogContains { pattern } => {
+            ReadyCondition::LogContains { pattern, timeout_seconds } => {
                 assert_eq!(pattern, "Ready to accept connections");
+                assert_eq!(timeout_seconds, None);
             }
             _ => panic!("Expected LogContains variant"),
         }
@@ -293,6 +329,7 @@ mod tests {
     fn test_ready_condition_url_responds_serialization() {
         let condition = ReadyCondition::UrlResponds {
             url: "http://localhost:3000/health".to_string(),
+            timeout_seconds: None,
         };
         
         let json = serde_json::to_value(&condition).unwrap();
@@ -309,8 +346,9 @@ mod tests {
         
         let condition: ReadyCondition = serde_json::from_value(json).unwrap();
         match condition {
-            ReadyCondition::UrlResponds { url } => {
+            ReadyCondition::UrlResponds { url, timeout_seconds } => {
                 assert_eq!(url, "http://localhost:8080/api/health");
+                assert_eq!(timeout_seconds, None);
             }
             _ => panic!("Expected UrlResponds variant"),
         }
@@ -320,11 +358,13 @@ mod tests {
     fn test_ready_condition_display() {
         let log_condition = ReadyCondition::LogContains {
             pattern: "Started".to_string(),
+            timeout_seconds: None,
         };
         assert_eq!(format!("{}", log_condition), "log_contains: 'Started'");
 
         let url_condition = ReadyCondition::UrlResponds {
             url: "http://localhost:3000".to_string(),
+            timeout_seconds: None,
         };
         assert_eq!(format!("{}", url_condition), "url_responds: 'http://localhost:3000'");
     }
@@ -350,6 +390,7 @@ mod tests {
             depends_on: vec!["database".to_string(), "redis".to_string()],
             ready_when: Some(ReadyCondition::LogContains {
                 pattern: "Listening on".to_string(),
+                timeout_seconds: None,
             }),
             env_file: Some(".env.local".to_string()),
         };
@@ -400,6 +441,7 @@ mod tests {
             depends_on: vec!["db".to_string()],
             ready_when: Some(ReadyCondition::LogContains {
                 pattern: "Ready".to_string(),
+                timeout_seconds: None,
             }),
             env_file: Some(".env".to_string()),
         };
@@ -660,6 +702,7 @@ mod tests {
                         depends_on: vec![],
                         ready_when: Some(ReadyCondition::LogContains {
                             pattern: "".to_string(),
+                            timeout_seconds: None,
                         }),
                         env_file: None,
                     },
@@ -686,6 +729,7 @@ mod tests {
                         depends_on: vec![],
                         ready_when: Some(ReadyCondition::LogContains {
                             pattern: "[invalid(".to_string(),
+                            timeout_seconds: None,
                         }),
                         env_file: None,
                     },
@@ -712,6 +756,7 @@ mod tests {
                         depends_on: vec![],
                         ready_when: Some(ReadyCondition::UrlResponds {
                             url: "".to_string(),
+                            timeout_seconds: None,
                         }),
                         env_file: None,
                     },
@@ -813,6 +858,7 @@ mod tests {
                         depends_on: vec![],
                         ready_when: Some(ReadyCondition::LogContains {
                             pattern: "ready to accept connections".to_string(),
+                            timeout_seconds: None,
                         }),
                         env_file: None,
                     },
@@ -824,6 +870,7 @@ mod tests {
                         depends_on: vec!["database".to_string()],
                         ready_when: Some(ReadyCondition::UrlResponds {
                             url: "http://localhost:8080/health".to_string(),
+                            timeout_seconds: None,
                         }),
                         env_file: Some(".env".to_string()),
                     },
@@ -834,6 +881,177 @@ mod tests {
                         command: "npm start".to_string(),
                         depends_on: vec!["backend".to_string()],
                         ready_when: None,
+                        env_file: None,
+                    },
+                );
+                map
+            },
+        };
+        
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ready_condition_with_timeout_serialization() {
+        let log_condition = ReadyCondition::LogContains {
+            pattern: "Server started".to_string(),
+            timeout_seconds: Some(120),
+        };
+        
+        let json = serde_json::to_value(&log_condition).unwrap();
+        assert_eq!(json["type"], "log_contains");
+        assert_eq!(json["pattern"], "Server started");
+        assert_eq!(json["timeout_seconds"], 120);
+
+        let url_condition = ReadyCondition::UrlResponds {
+            url: "http://localhost:3000/health".to_string(),
+            timeout_seconds: Some(90),
+        };
+        
+        let json = serde_json::to_value(&url_condition).unwrap();
+        assert_eq!(json["type"], "url_responds");
+        assert_eq!(json["url"], "http://localhost:3000/health");
+        assert_eq!(json["timeout_seconds"], 90);
+    }
+
+    #[test]
+    fn test_ready_condition_with_timeout_deserialization() {
+        // Test log_contains with timeout
+        let json = json!({
+            "type": "log_contains",
+            "pattern": "Ready",
+            "timeout_seconds": 60
+        });
+        
+        let condition: ReadyCondition = serde_json::from_value(json).unwrap();
+        match condition {
+            ReadyCondition::LogContains { pattern, timeout_seconds } => {
+                assert_eq!(pattern, "Ready");
+                assert_eq!(timeout_seconds, Some(60));
+            }
+            _ => panic!("Expected LogContains variant"),
+        }
+
+        // Test url_responds with timeout
+        let json = json!({
+            "type": "url_responds",
+            "url": "http://localhost:8080",
+            "timeout_seconds": 45
+        });
+        
+        let condition: ReadyCondition = serde_json::from_value(json).unwrap();
+        match condition {
+            ReadyCondition::UrlResponds { url, timeout_seconds } => {
+                assert_eq!(url, "http://localhost:8080");
+                assert_eq!(timeout_seconds, Some(45));
+            }
+            _ => panic!("Expected UrlResponds variant"),
+        }
+    }
+
+    #[test]
+    fn test_ready_condition_backward_compatibility() {
+        // Test that old configs without timeout_seconds still work
+        let json = json!({
+            "type": "log_contains",
+            "pattern": "Started"
+        });
+        
+        let condition: ReadyCondition = serde_json::from_value(json).unwrap();
+        match condition {
+            ReadyCondition::LogContains { pattern, timeout_seconds } => {
+                assert_eq!(pattern, "Started");
+                assert_eq!(timeout_seconds, None);
+            }
+            _ => panic!("Expected LogContains variant"),
+        }
+    }
+
+    #[test]
+    fn test_ready_condition_display_with_timeout() {
+        let log_condition = ReadyCondition::LogContains {
+            pattern: "Started".to_string(),
+            timeout_seconds: Some(120),
+        };
+        assert_eq!(format!("{}", log_condition), "log_contains: 'Started' (timeout: 120s)");
+
+        let url_condition = ReadyCondition::UrlResponds {
+            url: "http://localhost:3000".to_string(),
+            timeout_seconds: Some(90),
+        };
+        assert_eq!(format!("{}", url_condition), "url_responds: 'http://localhost:3000' (timeout: 90s)");
+    }
+
+    #[test]
+    fn test_validate_zero_timeout() {
+        let config = DmnConfig {
+            version: "1.0".to_string(),
+            services: {
+                let mut map = HashMap::new();
+                map.insert(
+                    "test".to_string(),
+                    ServiceConfig {
+                        command: "echo test".to_string(),
+                        depends_on: vec![],
+                        ready_when: Some(ReadyCondition::LogContains {
+                            pattern: "Ready".to_string(),
+                            timeout_seconds: Some(0),
+                        }),
+                        env_file: None,
+                    },
+                );
+                map
+            },
+        };
+        
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timeout_seconds must be greater than 0"));
+    }
+
+    #[test]
+    fn test_validate_zero_timeout_url_responds() {
+        let config = DmnConfig {
+            version: "1.0".to_string(),
+            services: {
+                let mut map = HashMap::new();
+                map.insert(
+                    "test".to_string(),
+                    ServiceConfig {
+                        command: "echo test".to_string(),
+                        depends_on: vec![],
+                        ready_when: Some(ReadyCondition::UrlResponds {
+                            url: "http://localhost:3000".to_string(),
+                            timeout_seconds: Some(0),
+                        }),
+                        env_file: None,
+                    },
+                );
+                map
+            },
+        };
+        
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timeout_seconds must be greater than 0"));
+    }
+
+    #[test]
+    fn test_validate_valid_timeout() {
+        let config = DmnConfig {
+            version: "1.0".to_string(),
+            services: {
+                let mut map = HashMap::new();
+                map.insert(
+                    "slow_service".to_string(),
+                    ServiceConfig {
+                        command: "slow_start.sh".to_string(),
+                        depends_on: vec![],
+                        ready_when: Some(ReadyCondition::LogContains {
+                            pattern: "Ready".to_string(),
+                            timeout_seconds: Some(300),
+                        }),
                         env_file: None,
                     },
                 );

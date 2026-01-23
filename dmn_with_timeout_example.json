@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "postgres",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "ready to accept connections",
+        "timeout_seconds": 120
+      }
+    },
+    "backend": {
+      "command": "cargo run",
+      "depends_on": ["database"],
+      "ready_when": {
+        "type": "url_responds",
+        "url": "http://localhost:8080/health",
+        "timeout_seconds": 90
+      }
+    },
+    "frontend": {
+      "command": "npm start",
+      "depends_on": ["backend"],
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "Server listening"
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ import { LogManager, LogLine } from './logs';
 import { ConfigWizard } from './wizard';
 import { DmnFileWatcher } from './file-watcher';
 import { ErrorDisplayManager, ErrorCategory } from './error-display';
+import { LogDocumentProvider } from './log-document-provider';
 
 let daemonManager: DaemonManager | null = null;
 let rpcClient: RpcClient | null = null;
@@ -18,6 +19,7 @@ let logManager: LogManager | null = null;
 let fileWatcher: DmnFileWatcher | null = null;
 let errorDisplayManager: ErrorDisplayManager | null = null;
 let extensionContext: vscode.ExtensionContext | null = null;
+let logDocumentProvider: LogDocumentProvider | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('OpenDaemon extension is now active');
@@ -48,15 +50,24 @@ export async function activate(context: vscode.ExtensionContext) {
     treeDataProvider = new ServiceTreeDataProvider();
     vscode.window.registerTreeDataProvider('opendaemon.services', treeDataProvider);
 
-    // Initialize log manager
-    logManager = new LogManager(() => rpcClient);
+    // Initialize log document provider for editor-tab-based log viewing
+    logDocumentProvider = new LogDocumentProvider();
+    context.subscriptions.push(
+        vscode.workspace.registerTextDocumentContentProvider('opendaemon-log', logDocumentProvider)
+    );
+
+    // Initialize log manager with document provider
+    logManager = new LogManager(() => rpcClient, logDocumentProvider);
 
     // Initialize command manager
     commandManager = new CommandManager(
         context,
         () => rpcClient,
         logManager,
-        () => errorDisplayManager
+        () => treeDataProvider,
+        async () => await loadServices(),
+        () => errorDisplayManager,
+        () => fileWatcher?.getConfigPath() ?? null
     );
     commandManager.registerCommands();
 
@@ -117,23 +128,32 @@ export async function deactivate() {
  * Initialize daemon with config
  */
 async function initializeDaemon(dmnConfigPath: string): Promise<void> {
+    console.log(`[OpenDaemon] Initializing with config: ${dmnConfigPath}`);
+    
     vscode.window.showInformationMessage(
         `OpenDaemon: Found configuration at ${path.basename(dmnConfigPath)}`
     );
 
-    // Start file watcher
+    // Step 1: Start file watcher
+    console.log('[OpenDaemon] Step 1: Starting file watcher...');
     if (fileWatcher) {
         fileWatcher.start(dmnConfigPath);
+        console.log('[OpenDaemon] File watcher started successfully');
+    } else {
+        console.warn('[OpenDaemon] File watcher not initialized');
     }
 
-    // Initialize daemon manager
+    // Step 2: Initialize daemon manager
+    console.log('[OpenDaemon] Step 2: Initializing daemon manager...');
     daemonManager = new DaemonManager(
         extensionContext!,
         (data) => handleDaemonStdout(data),
         (data) => handleDaemonStderr(data)
     );
+    console.log('[OpenDaemon] Daemon manager initialized');
 
-    // Initialize RPC client
+    // Step 3: Initialize RPC client
+    console.log('[OpenDaemon] Step 3: Initializing RPC client...');
     rpcClient = new RpcClient((data) => {
         if (daemonManager) {
             daemonManager.write(data);
@@ -144,15 +164,48 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
     rpcClient.on('notification', (method, params) => {
         handleDaemonNotification(method, params);
     });
+    console.log('[OpenDaemon] RPC client initialized and listening for notifications');
 
-    // Start daemon
+    // Step 4: Load services from config file to populate tree view immediately
+    // This is outside try/catch so tree view works even if daemon fails
+    console.log('[OpenDaemon] Step 4: Loading services from config...');
+    await loadServicesFromConfig(dmnConfigPath);
+    
+    // Log tree view state after loading services
+    const treeServices = treeDataProvider?.getAllServices() || [];
+    console.log(`[OpenDaemon] Tree view now has ${treeServices.length} services: ${treeServices.map(s => s.name).join(', ')}`);
+    if (treeServices.length === 0) {
+        console.warn('[OpenDaemon] Warning: No services loaded into tree view');
+    }
+
+    // Step 5: Start daemon
+    console.log('[OpenDaemon] Step 5: Starting daemon...');
     try {
         await daemonManager.start(dmnConfigPath);
+        console.log('[OpenDaemon] Daemon started successfully');
 
-        // Load initial service list
+        // Step 6: Load actual service statuses from daemon
+        // This synchronizes the tree view with the daemon's actual service states
+        console.log('[OpenDaemon] Step 6: Synchronizing service statuses with daemon...');
+        console.log('[OpenDaemon] Verifying loadServices() is called after daemon startup...');
         await loadServices();
+        console.log('[OpenDaemon] Service status synchronization complete');
+        
+        // Log final tree view state to verify synchronization
+        const finalServices = treeDataProvider?.getAllServices() || [];
+        console.log(`[OpenDaemon] Final tree view state after synchronization: ${finalServices.length} services`);
+        if (finalServices.length > 0) {
+            finalServices.forEach(s => {
+                console.log(`[OpenDaemon]   - ${s.name}: ${s.status}${s.exitCode !== undefined ? ` (exit code: ${s.exitCode})` : ''}`);
+            });
+        } else {
+            console.warn('[OpenDaemon] Warning: Tree view is empty after synchronization');
+        }
+        
+        console.log('[OpenDaemon] Initialization complete');
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error('[OpenDaemon] Failed to start daemon:', errorMessage);
 
         if (errorDisplayManager) {
             await errorDisplayManager.displayError({
@@ -244,16 +297,139 @@ async function findDmnConfig(): Promise<string | null> {
 }
 
 /**
+ * Load services from config file directly (without daemon)
+ * This populates the tree view immediately so services are visible
+ */
+async function loadServicesFromConfig(configPath: string): Promise<void> {
+    console.log('[loadServicesFromConfig] Starting to load services from config:', configPath);
+    
+    if (!treeDataProvider) {
+        console.error('[loadServicesFromConfig] Tree data provider not initialized');
+        return;
+    }
+
+    console.log('[loadServicesFromConfig] Tree data provider is initialized');
+
+    try {
+        console.log('[loadServicesFromConfig] Reading config file...');
+        const configContent = await fs.promises.readFile(configPath, 'utf-8');
+        console.log('[loadServicesFromConfig] Config file read successfully, length:', configContent.length);
+
+        console.log('[loadServicesFromConfig] Parsing JSON...');
+        const config = JSON.parse(configContent) as { services?: Record<string, unknown> };
+        console.log('[loadServicesFromConfig] JSON parsed successfully');
+
+        if (config.services) {
+            const serviceNames = Object.keys(config.services);
+            console.log('[loadServicesFromConfig] Found services object with', serviceNames.length, 'services');
+            
+            if (serviceNames.length === 0) {
+                console.warn('[loadServicesFromConfig] Services object is empty');
+                treeDataProvider.updateServices([]);
+                
+                if (errorDisplayManager) {
+                    await errorDisplayManager.displayError({
+                        message: 'No services defined in dmn.json. The "services" object is empty.',
+                        category: ErrorCategory.CONFIG,
+                        details: `Config file: ${configPath}\n\nPlease add at least one service to your configuration.`
+                    });
+                }
+            } else {
+                console.log('[loadServicesFromConfig] Service names:', serviceNames.join(', '));
+
+                const services = serviceNames.map(name => ({
+                    name,
+                    status: ServiceStatus.NotStarted
+                }));
+
+                console.log('[loadServicesFromConfig] Updating tree view with services...');
+                treeDataProvider.updateServices(services);
+                console.log('[loadServicesFromConfig] Successfully loaded', services.length, 'services from config:', serviceNames.join(', '));
+            }
+        } else {
+            console.warn('[loadServicesFromConfig] No services object found in config');
+            treeDataProvider.updateServices([]);
+            
+            if (errorDisplayManager) {
+                await errorDisplayManager.displayError({
+                    message: 'Missing "services" object in dmn.json',
+                    category: ErrorCategory.CONFIG,
+                    details: `Config file: ${configPath}\n\nThe configuration file must contain a "services" object with at least one service definition.`
+                });
+            }
+        }
+    } catch (err) {
+        console.error('[loadServicesFromConfig] Failed to load services from config:', err);
+        
+        // Build detailed error message based on error type
+        let errorMessage = 'Failed to load services from dmn.json';
+        let errorDetails = `Config file: ${configPath}\n\n`;
+        
+        if (err instanceof SyntaxError) {
+            console.error('[loadServicesFromConfig] JSON parsing error:', err.message);
+            errorMessage = 'Invalid JSON in dmn.json';
+            errorDetails += `JSON parsing error: ${err.message}\n\nPlease check that your configuration file contains valid JSON syntax.`;
+        } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            console.error('[loadServicesFromConfig] Config file not found');
+            errorMessage = 'Configuration file not found';
+            errorDetails += 'The dmn.json file could not be found at the expected location.';
+        } else if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+            console.error('[loadServicesFromConfig] Permission denied reading config file');
+            errorMessage = 'Permission denied reading dmn.json';
+            errorDetails += 'Unable to read the configuration file due to insufficient permissions.';
+        } else if (err instanceof Error) {
+            console.error('[loadServicesFromConfig] Error details:', {
+                name: err.name,
+                message: err.message,
+                stack: err.stack
+            });
+            errorDetails += `Error: ${err.message}`;
+        } else {
+            console.error('[loadServicesFromConfig] Unknown error type:', String(err));
+            errorDetails += `Unknown error: ${String(err)}`;
+        }
+        
+        // Display error using error display manager
+        if (errorDisplayManager) {
+            await errorDisplayManager.displayError({
+                message: errorMessage,
+                category: ErrorCategory.CONFIG,
+                details: errorDetails
+            });
+        }
+        
+        // Clear tree view on error
+        treeDataProvider.updateServices([]);
+    }
+}
+
+/**
  * Load services from daemon
  */
 async function loadServices(): Promise<void> {
-    if (!rpcClient || !treeDataProvider) {
+    console.log('[loadServices] Starting to load service statuses from daemon...');
+    
+    if (!rpcClient) {
+        console.error('[loadServices] RPC client not initialized - cannot load service statuses');
+        return;
+    }
+
+    if (!treeDataProvider) {
+        console.error('[loadServices] Tree data provider not initialized - cannot update service statuses');
         return;
     }
 
     try {
+        console.log('[loadServices] Sending getStatus RPC request to daemon...');
         const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
+        console.log('[loadServices] Received response from daemon:', JSON.stringify(response));
+        
         const result = response.services;
+
+        if (!result || Object.keys(result).length === 0) {
+            console.warn('[loadServices] Daemon returned no services');
+            return;
+        }
 
         // Convert status strings to ServiceStatus enum
         const services = Object.entries(result).map(([name, statusStr]) => ({
@@ -261,15 +437,49 @@ async function loadServices(): Promise<void> {
             status: parseServiceStatus(statusStr)
         }));
 
+        console.log('[loadServices] Updating tree view with', services.length, 'service statuses');
         treeDataProvider.updateServices(services);
+        
+        // Log successful status updates for each service
+        services.forEach(service => {
+            console.log(`[loadServices] Successfully updated status for service "${service.name}": ${service.status}`);
+        });
+        
+        console.log('[loadServices] Service status synchronization complete');
     } catch (err) {
-        console.error('Failed to load services:', err);
+        console.error('[loadServices] Failed to load services from daemon:', err);
+
+        // Provide detailed error information
+        let errorMessage = 'Failed to load service status from daemon';
+        let errorDetails = '';
+        
+        if (err instanceof Error) {
+            console.error('[loadServices] Error details:', {
+                name: err.name,
+                message: err.message,
+                stack: err.stack
+            });
+            
+            // Check for specific RPC error types
+            if (err.message.includes('timeout')) {
+                errorMessage = 'Timeout while communicating with daemon';
+                errorDetails = 'The daemon did not respond to the status request in time. The daemon may be busy or unresponsive.';
+            } else if (err.message.includes('connection')) {
+                errorMessage = 'Connection error with daemon';
+                errorDetails = 'Unable to establish communication with the daemon. The daemon may not be running or may have crashed.';
+            } else {
+                errorDetails = err.message;
+            }
+        } else {
+            console.error('[loadServices] Unknown error type:', String(err));
+            errorDetails = String(err);
+        }
 
         if (errorDisplayManager) {
             await errorDisplayManager.displayError({
-                message: 'Failed to load service status from daemon',
+                message: errorMessage,
                 category: ErrorCategory.RPC,
-                details: err instanceof Error ? err.message : String(err)
+                details: errorDetails
             });
         }
     }

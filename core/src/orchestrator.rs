@@ -69,8 +69,8 @@ impl Orchestrator {
         // Create process manager
         let process_manager = ProcessManager::new(Arc::clone(&log_buffer));
         
-        // Create ready watcher with default timeout of 30 seconds
-        let ready_watcher = Arc::new(Mutex::new(ReadyWatcher::new(Duration::from_secs(30))));
+        // Create ready watcher with default timeout of 60 seconds
+        let ready_watcher = Arc::new(Mutex::new(ReadyWatcher::new(Duration::from_secs(60))));
         
         // Create event channel for orchestrator events
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -238,6 +238,16 @@ impl Orchestrator {
                 }
             });
             
+            // Extract custom timeout from ready condition if specified
+            let custom_timeout = match ready_condition {
+                crate::config::ReadyCondition::LogContains { timeout_seconds, .. } => {
+                    timeout_seconds.map(Duration::from_secs)
+                }
+                crate::config::ReadyCondition::UrlResponds { timeout_seconds, .. } => {
+                    timeout_seconds.map(Duration::from_secs)
+                }
+            };
+            
             // Watch for readiness in a separate task
             let service_name_clone = service_name.to_string();
             let ready_condition_clone = ready_condition.clone();
@@ -247,10 +257,11 @@ impl Orchestrator {
             tokio::spawn(async move {
                 let result = {
                     let mut watcher = ready_watcher.lock().await;
-                    watcher.watch_service(
+                    watcher.watch_service_with_timeout(
                         service_name_clone.clone(),
                         ready_condition_clone,
                         Some(log_rx),
+                        custom_timeout,
                     ).await
                 };
                 

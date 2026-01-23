@@ -122,8 +122,14 @@ pub enum ProcessError {
 /// Ready watcher errors
 #[derive(Debug, Error)]
 pub enum ReadyError {
-    #[error("Timeout waiting for service '{service}' to be ready after {timeout_secs} seconds")]
-    Timeout { service: String, timeout_secs: u64 },
+    #[error("Timeout waiting for service '{service}' to be ready after {timeout_secs} seconds.\nCondition: {condition}\n{details}{troubleshooting}")]
+    Timeout {
+        service: String,
+        timeout_secs: u64,
+        condition: String,
+        details: String,
+        troubleshooting: String,
+    },
     
     #[error("Invalid regex pattern for service '{service}': {pattern}")]
     InvalidRegex { service: String, pattern: String },
@@ -311,11 +317,14 @@ mod tests {
         let err = ReadyError::Timeout {
             service: "database".to_string(),
             timeout_secs: 30,
+            condition: "log_contains pattern: 'ready'".to_string(),
+            details: "Last 2 log lines:\n  Starting database\n  Loading config\n".to_string(),
+            troubleshooting: "Troubleshooting:\n- Check the pattern\n- Increase timeout".to_string(),
         };
-        assert_eq!(
-            err.to_string(),
-            "Timeout waiting for service 'database' to be ready after 30 seconds"
-        );
+        let err_str = err.to_string();
+        assert!(err_str.contains("database"));
+        assert!(err_str.contains("30 seconds"));
+        assert!(err_str.contains("log_contains"));
     }
 
     #[test]
