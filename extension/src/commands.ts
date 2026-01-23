@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { RpcClient } from './rpc-client';
-import { ServiceTreeItem, ServiceInfo } from './tree-view';
+import { ServiceTreeItem, ServiceInfo, ServiceStatus, ServiceTreeDataProvider } from './tree-view';
 import { LogManager } from './logs';
 import { ErrorDisplayManager, ErrorCategory } from './error-display';
 import { TerminalManager } from './terminal-manager';
@@ -241,6 +241,9 @@ export class CommandManager {
                 }
             );
 
+            // Close all terminals (terminals will also be closed via notification handlers)
+            this.terminalManager.closeAllTerminals();
+
             vscode.window.showInformationMessage('All services stopped');
             
             // Log success
@@ -259,6 +262,75 @@ export class CommandManager {
                 `Failed to stop services: ${errorMessage}`
             );
         }
+    }
+
+    /**
+     * Get all dependencies for a service (recursively)
+     * Tries RPC first, falls back to reading config file directly
+     */
+    private async getDependencyChain(serviceName: string): Promise<string[]> {
+        const visited = new Set<string>();
+        const result: string[] = [];
+        
+        // Try to get config for fallback
+        let configServices: Record<string, { depends_on?: string[] }> | null = null;
+        const configPath = this.getConfigPath?.();
+        if (configPath) {
+            try {
+                const fs = require('fs');
+                const configContent = fs.readFileSync(configPath, 'utf-8');
+                const config = JSON.parse(configContent);
+                configServices = config.services || null;
+            } catch {
+                // Ignore config read errors
+            }
+        }
+
+        const visit = async (name: string) => {
+            if (visited.has(name)) {
+                return;
+            }
+            visited.add(name);
+
+            let deps: string[] = [];
+            
+            // Try RPC first
+            const rpcClient = this.getRpcClient();
+            if (rpcClient) {
+                try {
+                    const response = await rpcClient.request('getDependencies', { service: name }) as {
+                        dependencies?: string[];
+                    };
+                    deps = response?.dependencies || [];
+                } catch {
+                    // RPC failed, fall back to config
+                    if (configServices && configServices[name]) {
+                        deps = configServices[name].depends_on || [];
+                        
+                        // Log fallback
+                        if (this.activityLogger) {
+                            this.activityLogger.log(`Using config-based dependencies for ${name}: ${deps.join(', ') || 'none'}`);
+                        }
+                    }
+                }
+            } else if (configServices && configServices[name]) {
+                // No RPC client, use config directly
+                deps = configServices[name].depends_on || [];
+            }
+            
+            // Visit dependencies first (depth-first)
+            for (const dep of deps) {
+                await visit(dep);
+            }
+            
+            // Add this service after its dependencies
+            if (name !== serviceName) { // Don't add the original service
+                result.push(name);
+            }
+        };
+
+        await visit(serviceName);
+        return result;
     }
 
     /**
@@ -282,13 +354,26 @@ export class CommandManager {
                 this.activityLogger.logServiceAction(targetItem.serviceName, 'Starting service');
             }
 
-            // Create terminal BEFORE starting service so logs appear immediately
+            // Get dependency chain and create terminals for all services
+            const dependencies = await this.getDependencyChain(targetItem.serviceName);
+            
+            // Create terminals for dependencies first
+            for (const dep of dependencies) {
+                this.terminalManager.getOrCreateTerminal(dep);
+            }
+            
+            // Create terminal for the target service
             this.terminalManager.getOrCreateTerminal(targetItem.serviceName);
+
+            // Update tree view to show Starting status immediately
+            await vscode.commands.executeCommand('opendaemon.refresh');
 
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
-                    title: `Starting ${targetItem.serviceName}...`,
+                    title: dependencies.length > 0 
+                        ? `Starting ${targetItem.serviceName} (and ${dependencies.length} dependencies)...`
+                        : `Starting ${targetItem.serviceName}...`,
                     cancellable: false
                 },
                 async () => {
@@ -299,18 +384,43 @@ export class CommandManager {
             // Show terminal after service starts
             this.terminalManager.showTerminal(targetItem.serviceName, true);
 
-            vscode.window.showInformationMessage(`Service ${targetItem.serviceName} started`);
+            const depMessage = dependencies.length > 0 
+                ? ` (with dependencies: ${dependencies.join(', ')})`
+                : '';
+            // Note: The service is now starting, but may not be ready yet
+            // Status will be updated via serviceReady/serviceFailed notifications
+            vscode.window.showInformationMessage(`Service ${targetItem.serviceName} is starting${depMessage}`);
             
             // Log success
             if (this.activityLogger) {
-                this.activityLogger.logServiceAction(targetItem.serviceName, 'Service started successfully');
+                this.activityLogger.logServiceAction(targetItem.serviceName, `Service started successfully${depMessage}`);
             }
+            
+            // Refresh to get latest status from daemon
+            await vscode.commands.executeCommand('opendaemon.refresh');
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             
             // Log error
             if (this.activityLogger) {
                 this.activityLogger.logError(`startService(${targetItem.serviceName})`, errorMessage);
+            }
+            
+            // Close the terminal since the service failed to start
+            try {
+                this.terminalManager.closeTerminal(targetItem.serviceName);
+                
+                if (this.activityLogger) {
+                    this.activityLogger.logTerminalAction(targetItem.serviceName, 'Terminal closed on start failure');
+                }
+            } catch {
+                // Ignore terminal close errors
+            }
+            
+            // Update status to failed in tree view  
+            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
+            if (treeDataProvider) {
+                treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.Failed);
             }
             
             vscode.window.showErrorMessage(
@@ -334,12 +444,12 @@ export class CommandManager {
             return;
         }
 
-        try {
-            // Log the action
-            if (this.activityLogger) {
-                this.activityLogger.logServiceAction(targetItem.serviceName, 'Stopping service');
-            }
+        // Log the action
+        if (this.activityLogger) {
+            this.activityLogger.logServiceAction(targetItem.serviceName, 'Stopping service');
+        }
 
+        try {
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -368,6 +478,21 @@ export class CommandManager {
             vscode.window.showErrorMessage(
                 `Failed to stop ${targetItem.serviceName}: ${errorMessage}`
             );
+        } finally {
+            // Always close the terminal when stopping, regardless of RPC success/failure
+            // The notification handler will also try to close it, but this ensures cleanup
+            // even if the RPC times out before the notification is sent
+            try {
+                this.terminalManager.closeTerminal(targetItem.serviceName);
+            } catch {
+                // Ignore errors closing terminal
+            }
+            
+            // Update tree view status to Stopped
+            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
+            if (treeDataProvider) {
+                treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.Stopped);
+            }
         }
     }
 

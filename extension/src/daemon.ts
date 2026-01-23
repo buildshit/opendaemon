@@ -91,6 +91,29 @@ export class DaemonManager {
     private getBinaryPath(): string {
         const platform = process.platform;
         const arch = process.arch;
+        
+        // First, check for locally built binary in workspace (for development)
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            
+            // Check for release build first, then debug
+            const releasePath = path.join(workspaceRoot, 'target', 'release', platform === 'win32' ? 'dmn.exe' : 'dmn');
+            const debugPath = path.join(workspaceRoot, 'target', 'debug', platform === 'win32' ? 'dmn.exe' : 'dmn');
+            
+            // Use fs.existsSync to check if file exists
+            const fs = require('fs');
+            if (fs.existsSync(releasePath)) {
+                console.log(`[DaemonManager] Using local release binary: ${releasePath}`);
+                return releasePath;
+            }
+            if (fs.existsSync(debugPath)) {
+                console.log(`[DaemonManager] Using local debug binary: ${debugPath}`);
+                return debugPath;
+            }
+        }
+        
+        // Fall back to bundled binary
         let binaryName: string;
         
         // Select platform-specific binary
@@ -111,6 +134,7 @@ export class DaemonManager {
 
         // Look for binary in extension's bin directory
         const binPath = path.join(this.context.extensionPath, 'bin', binaryName);
+        console.log(`[DaemonManager] Using bundled binary: ${binPath}`);
         
         return binPath;
     }

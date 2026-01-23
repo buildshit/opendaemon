@@ -11,16 +11,138 @@ export interface LogLine {
 }
 
 /**
- * Manages integrated terminals for services
- * Each service gets its own named terminal where logs are displayed in real-time
+ * Function type for sending stdin data to a service
  */
-export class TerminalManager {
+export type StdinWriter = (serviceName: string, data: string) => Promise<void>;
+
+/**
+ * Pseudoterminal implementation that displays service logs
+ * and can forward stdin to the daemon
+ */
+class ServicePseudoterminal implements vscode.Pseudoterminal {
+    private writeEmitter = new vscode.EventEmitter<string>();
+    private closeEmitter = new vscode.EventEmitter<number | void>();
+    
+    onDidWrite: vscode.Event<string> = this.writeEmitter.event;
+    onDidClose: vscode.Event<number | void> = this.closeEmitter.event;
+    
+    private dimensions: vscode.TerminalDimensions | undefined;
+    private isOpen = false;
+    private pendingOutput: string[] = [];
+    private stdinWriter: StdinWriter | null = null;
+    private serviceName: string;
+    private activityLogger: ActivityLogger | null;
+
+    constructor(serviceName: string, activityLogger: ActivityLogger | null, stdinWriter?: StdinWriter) {
+        this.serviceName = serviceName;
+        this.activityLogger = activityLogger;
+        this.stdinWriter = stdinWriter || null;
+    }
+
+    open(initialDimensions: vscode.TerminalDimensions | undefined): void {
+        this.dimensions = initialDimensions;
+        this.isOpen = true;
+        
+        // Write header
+        this.writeEmitter.fire(`\x1b[1;36m=== Service: ${this.serviceName} ===\x1b[0m\r\n`);
+        this.writeEmitter.fire(`\x1b[90mWaiting for service output...\x1b[0m\r\n\r\n`);
+        
+        // Write any pending output
+        for (const output of this.pendingOutput) {
+            this.writeEmitter.fire(output);
+        }
+        this.pendingOutput = [];
+    }
+
+    close(): void {
+        this.isOpen = false;
+    }
+
+    handleInput(data: string): void {
+        // Forward input to the daemon via stdin writer
+        if (this.stdinWriter) {
+            // Echo the input locally
+            this.writeEmitter.fire(data);
+            
+            // Handle enter key
+            if (data === '\r') {
+                this.writeEmitter.fire('\n');
+            }
+            
+            // Forward to daemon (with newline for commands)
+            this.stdinWriter(this.serviceName, data).catch(err => {
+                if (this.activityLogger) {
+                    this.activityLogger.logError(
+                        `stdin write for ${this.serviceName}`,
+                        err instanceof Error ? err.message : String(err)
+                    );
+                }
+            });
+        }
+    }
+
+    setDimensions(dimensions: vscode.TerminalDimensions): void {
+        this.dimensions = dimensions;
+    }
+
+    /**
+     * Write text to the terminal
+     */
+    write(text: string): void {
+        if (this.isOpen) {
+            this.writeEmitter.fire(text);
+        } else {
+            this.pendingOutput.push(text);
+        }
+    }
+
+    /**
+     * Write a log line with formatting
+     */
+    writeLogLine(logLine: LogLine): void {
+        // Format timestamp to be more readable (just time portion)
+        const timestamp = logLine.timestamp.split('T')[1]?.split('.')[0] || logLine.timestamp;
+        
+        // Color coding using ANSI: stderr is red, stdout has gray timestamp
+        const streamPrefix = logLine.stream === 'stderr' ? '\x1b[91m' : '';
+        const resetColor = logLine.stream === 'stderr' ? '\x1b[0m' : '';
+        
+        const formattedLine = `\x1b[90m${timestamp}\x1b[0m ${streamPrefix}${logLine.content}${resetColor}\r\n`;
+        
+        this.write(formattedLine);
+    }
+
+    /**
+     * Close the terminal
+     */
+    terminate(): void {
+        this.writeEmitter.fire('\r\n\x1b[1;33m=== Service stopped ===\x1b[0m\r\n');
+        this.closeEmitter.fire(0);
+    }
+
+    /**
+     * Clear the terminal
+     */
+    clear(): void {
+        // Send ANSI clear screen and cursor home
+        this.write('\x1b[2J\x1b[H');
+    }
+}
+
+/**
+ * Manages integrated terminals for services using pseudoterminals
+ * that display log output from the daemon
+ */
+export class TerminalManager implements vscode.Disposable {
     private terminals: Map<string, vscode.Terminal> = new Map();
+    private pseudoterminals: Map<string, ServicePseudoterminal> = new Map();
     private disposables: vscode.Disposable[] = [];
     private activityLogger: ActivityLogger | null;
+    private stdinWriter: StdinWriter | null = null;
 
     constructor(activityLogger?: ActivityLogger) {
         this.activityLogger = activityLogger || null;
+        
         // Listen for terminal closures to clean up our map
         this.disposables.push(
             vscode.window.onDidCloseTerminal((terminal) => {
@@ -28,16 +150,24 @@ export class TerminalManager {
                 for (const [serviceName, term] of this.terminals.entries()) {
                     if (term === terminal) {
                         this.terminals.delete(serviceName);
+                        this.pseudoterminals.delete(serviceName);
                         
                         // Log terminal closure
                         if (this.activityLogger) {
-                            this.activityLogger.logTerminalAction(serviceName, 'Terminal closed');
+                            this.activityLogger.logTerminalAction(serviceName, 'Terminal closed by user');
                         }
                         break;
                     }
                 }
             })
         );
+    }
+
+    /**
+     * Set the stdin writer function for forwarding input to daemon
+     */
+    setStdinWriter(writer: StdinWriter): void {
+        this.stdinWriter = writer;
     }
 
     /**
@@ -50,18 +180,27 @@ export class TerminalManager {
 
         if (!terminal || terminal.exitStatus !== undefined) {
             try {
-                // Terminal doesn't exist or was closed, create a new one
+                // Create a pseudoterminal that can display logs
+                const pty = new ServicePseudoterminal(
+                    serviceName,
+                    this.activityLogger,
+                    this.stdinWriter || undefined
+                );
+                
+                // Create terminal with pseudoterminal
                 terminal = vscode.window.createTerminal({
                     name: `dmn: ${serviceName}`,
                     iconPath: new vscode.ThemeIcon('server-process'),
-                    isTransient: false, // Keep terminal in list even when not active
+                    pty: pty,
+                    isTransient: false,
                 });
 
                 this.terminals.set(serviceName, terminal);
+                this.pseudoterminals.set(serviceName, pty);
                 
                 // Log terminal creation
                 if (this.activityLogger) {
-                    this.activityLogger.logTerminalAction(serviceName, 'Terminal created');
+                    this.activityLogger.logTerminalAction(serviceName, 'Terminal created (pseudoterminal)');
                 }
             } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);
@@ -105,21 +244,21 @@ export class TerminalManager {
      */
     writeLogLine(serviceName: string, logLine: LogLine): void {
         try {
-            const terminal = this.getOrCreateTerminal(serviceName);
+            // Ensure terminal exists
+            this.getOrCreateTerminal(serviceName);
             
-            // Format the log line with timestamp and stream indicator
-            const streamPrefix = logLine.stream === 'stderr' ? '[stderr]' : '[stdout]';
-            const formattedLine = `${logLine.timestamp} ${streamPrefix} ${logLine.content}`;
+            // Get the pseudoterminal and write to it
+            const pty = this.pseudoterminals.get(serviceName);
+            if (pty) {
+                pty.writeLogLine(logLine);
+            }
             
-            // Write to terminal
-            terminal.sendText(`echo "${this.escapeForShell(formattedLine)}"`, false);
-            
-            // Log activity
+            // Log activity (throttled elsewhere)
             if (this.activityLogger) {
                 this.activityLogger.logTerminalAction(
                     serviceName,
-                    'Log line written',
-                    `stream: ${logLine.stream}`
+                    'Log line received',
+                    `stream: ${logLine.stream}, length: ${logLine.content.length}`
                 );
             }
         } catch (err) {
@@ -138,14 +277,15 @@ export class TerminalManager {
     }
 
     /**
-     * Send text to a service's terminal
+     * Write raw text to a service's terminal
      * @param serviceName Name of the service
-     * @param text Text to send (will be displayed as output)
+     * @param text Text to write
      */
-    sendText(serviceName: string, text: string): void {
-        const terminal = this.getOrCreateTerminal(serviceName);
-        // Use echo to display text without executing it
-        terminal.sendText(`echo "${this.escapeForShell(text)}"`, false);
+    writeText(serviceName: string, text: string): void {
+        const pty = this.pseudoterminals.get(serviceName);
+        if (pty) {
+            pty.write(text);
+        }
     }
 
     /**
@@ -154,11 +294,11 @@ export class TerminalManager {
      * @param lines Array of log lines to display
      */
     writeLines(serviceName: string, lines: string[]): void {
-        const terminal = this.getOrCreateTerminal(serviceName);
-        
-        for (const line of lines) {
-            // Display each line
-            terminal.sendText(`echo "${this.escapeForShell(line)}"`, false);
+        const pty = this.pseudoterminals.get(serviceName);
+        if (pty) {
+            for (const line of lines) {
+                pty.write(line + '\r\n');
+            }
         }
     }
 
@@ -167,14 +307,9 @@ export class TerminalManager {
      * @param serviceName Name of the service
      */
     clearTerminal(serviceName: string): void {
-        const terminal = this.terminals.get(serviceName);
-        if (terminal) {
-            // Send clear command (works on both Windows and Unix)
-            if (process.platform === 'win32') {
-                terminal.sendText('cls', true);
-            } else {
-                terminal.sendText('clear', true);
-            }
+        const pty = this.pseudoterminals.get(serviceName);
+        if (pty) {
+            pty.clear();
         }
     }
 
@@ -183,14 +318,21 @@ export class TerminalManager {
      * @param serviceName Name of the service
      */
     closeTerminal(serviceName: string): void {
+        const pty = this.pseudoterminals.get(serviceName);
         const terminal = this.terminals.get(serviceName);
+        
+        if (pty) {
+            pty.terminate();
+        }
+        
         if (terminal) {
             terminal.dispose();
             this.terminals.delete(serviceName);
+            this.pseudoterminals.delete(serviceName);
             
             // Log terminal closure
             if (this.activityLogger) {
-                this.activityLogger.logTerminalAction(serviceName, 'Terminal closed manually');
+                this.activityLogger.logTerminalAction(serviceName, 'Terminal closed programmatically');
             }
         }
     }
@@ -206,6 +348,10 @@ export class TerminalManager {
         }
         
         for (const [serviceName, terminal] of this.terminals.entries()) {
+            const pty = this.pseudoterminals.get(serviceName);
+            if (pty) {
+                pty.terminate();
+            }
             terminal.dispose();
             
             // Log each terminal closure
@@ -214,6 +360,7 @@ export class TerminalManager {
             }
         }
         this.terminals.clear();
+        this.pseudoterminals.clear();
     }
 
     /**
@@ -229,19 +376,6 @@ export class TerminalManager {
     hasTerminal(serviceName: string): boolean {
         const terminal = this.terminals.get(serviceName);
         return terminal !== undefined && terminal.exitStatus === undefined;
-    }
-
-    /**
-     * Escape text for safe display in shell
-     * @param text Text to escape
-     */
-    private escapeForShell(text: string): string {
-        // Escape double quotes and backslashes for echo command
-        return text
-            .replace(/\\/g, '\\\\')
-            .replace(/"/g, '\\"')
-            .replace(/\$/g, '\\$')
-            .replace(/`/g, '\\`');
     }
 
     /**

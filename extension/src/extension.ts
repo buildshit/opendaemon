@@ -202,9 +202,25 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         await daemonManager.start(dmnConfigPath);
         console.log('[OpenDaemon] Daemon started successfully');
 
-        // Step 6: Load actual service statuses from daemon
+        // Step 6: Set up stdin writer for terminals
+        console.log('[OpenDaemon] Step 6: Configuring terminal stdin writer...');
+        if (commandManager && rpcClient) {
+            const terminalManager = commandManager.getTerminalManager();
+            terminalManager.setStdinWriter(async (serviceName: string, data: string) => {
+                if (rpcClient) {
+                    try {
+                        await rpcClient.request('writeStdin', { service: serviceName, data });
+                    } catch (err) {
+                        console.error(`Failed to write stdin to ${serviceName}:`, err);
+                    }
+                }
+            });
+            console.log('[OpenDaemon] Terminal stdin writer configured');
+        }
+
+        // Step 7: Load actual service statuses from daemon
         // This synchronizes the tree view with the daemon's actual service states
-        console.log('[OpenDaemon] Step 6: Synchronizing service statuses with daemon...');
+        console.log('[OpenDaemon] Step 7: Synchronizing service statuses with daemon...');
         console.log('[OpenDaemon] Verifying loadServices() is called after daemon startup...');
         await loadServices();
         console.log('[OpenDaemon] Service status synchronization complete');
@@ -505,21 +521,26 @@ async function loadServices(): Promise<void> {
 
 /**
  * Parse service status string to enum
+ * Handles both snake_case (from RPC) and PascalCase formats
  */
 function parseServiceStatus(statusStr: string): ServiceStatus {
-    // Handle Rust enum format like "Failed { exit_code: 1 }"
-    if (statusStr.startsWith('Failed')) {
+    // Normalize to lowercase for comparison
+    const normalized = statusStr.toLowerCase();
+    
+    // Handle failed status with exit code format: "failed (exit code: X)"
+    if (normalized.startsWith('failed')) {
         return ServiceStatus.Failed;
     }
 
-    switch (statusStr) {
-        case 'Running':
+    switch (normalized) {
+        case 'running':
             return ServiceStatus.Running;
-        case 'Starting':
+        case 'starting':
             return ServiceStatus.Starting;
-        case 'Stopped':
+        case 'stopped':
             return ServiceStatus.Stopped;
-        case 'NotStarted':
+        case 'not_started':
+        case 'notstarted':
             return ServiceStatus.NotStarted;
         default:
             return ServiceStatus.NotStarted;
@@ -653,6 +674,25 @@ function handleDaemonNotification(method: string, params: unknown): void {
             const { service, error } = params as { service: string; error: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Failed);
 
+            // Close the terminal for this service since it failed
+            if (commandManager) {
+                try {
+                    const terminalManager = commandManager.getTerminalManager();
+                    terminalManager.closeTerminal(service);
+                    
+                    if (activityLogger) {
+                        activityLogger.logTerminalAction(service, 'Terminal closed on service failure');
+                    }
+                } catch (err) {
+                    if (activityLogger) {
+                        activityLogger.logError(
+                            `Closing terminal for ${service}`,
+                            err instanceof Error ? err.message : String(err)
+                        );
+                    }
+                }
+            }
+
             // Show error notification using error display manager
             if (errorDisplayManager) {
                 errorDisplayManager.displayServiceFailure(service, error);
@@ -669,13 +709,32 @@ function handleDaemonNotification(method: string, params: unknown): void {
             const { service } = params as { service: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Stopped);
             
+            // Close the terminal for this service (do this first to ensure cleanup)
+            if (commandManager) {
+                try {
+                    const terminalManager = commandManager.getTerminalManager();
+                    terminalManager.closeTerminal(service);
+                    
+                    if (activityLogger) {
+                        activityLogger.logTerminalAction(service, 'Terminal closed on service stop');
+                    }
+                } catch (err) {
+                    if (activityLogger) {
+                        activityLogger.logError(
+                            `Closing terminal for ${service}`,
+                            err instanceof Error ? err.message : String(err)
+                        );
+                    }
+                }
+            }
+            
             // Log service stopped
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Stopped');
             }
         }
 
-        // Handle log lines - route to BOTH LogManager and TerminalManager
+        // Handle log lines - route to both terminal and LogManager
         if (method === 'logLine') {
             const { service, timestamp, content, stream } = params as {
                 service: string;
@@ -690,15 +749,19 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 stream: stream as 'stdout' | 'stderr'
             };
 
+            // Route to terminal for real-time display
+            if (commandManager) {
+                try {
+                    const terminalManager = commandManager.getTerminalManager();
+                    terminalManager.writeLogLine(service, logLine);
+                } catch (err) {
+                    // Terminal might not exist yet, that's okay
+                }
+            }
+
             // Route to LogManager for editor-based viewing
             if (logManager) {
                 logManager.appendLogLine(service, logLine);
-            }
-
-            // Route to TerminalManager for terminal-based viewing
-            if (commandManager) {
-                const terminalManager = commandManager.getTerminalManager();
-                terminalManager.writeLogLine(service, logLine);
             }
             
             // Log activity (throttled to avoid spam)
