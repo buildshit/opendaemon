@@ -117,7 +117,7 @@ async fn test_mcp_tool_registration() {
     
     let mcp_server = DmnMcpServer::new_authenticated(Arc::clone(&orchestrator));
     
-    let tools = mcp_server.list_tools();
+    let tools = mcp_server.get_tools();
     
     assert_eq!(tools.len(), 3, "Should have 3 tools");
     

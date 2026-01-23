@@ -6,8 +6,15 @@ use std::time::{Duration, SystemTime};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::timeout;
+
+/// Event emitted by ProcessManager for log lines
+#[derive(Debug, Clone)]
+pub struct LogLineEvent {
+    pub service: String,
+    pub line: LogLine,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServiceStatus {
@@ -37,6 +44,7 @@ pub enum ProcessError {
 pub struct ManagedProcess {
     pub service_name: String,
     pub child: Child,
+    pub stdin: Option<tokio::process::ChildStdin>,
     pub status: ServiceStatus,
     pub started_at: SystemTime,
     pub env_vars: HashMap<String, String>,
@@ -45,6 +53,7 @@ pub struct ManagedProcess {
 pub struct ProcessManager {
     processes: HashMap<String, ManagedProcess>,
     log_buffer: Arc<Mutex<LogBuffer>>,
+    log_event_tx: Option<mpsc::UnboundedSender<LogLineEvent>>,
 }
 
 impl ProcessManager {
@@ -52,6 +61,19 @@ impl ProcessManager {
         Self {
             processes: HashMap::new(),
             log_buffer,
+            log_event_tx: None,
+        }
+    }
+
+    /// Create a new ProcessManager with an event sender for log line notifications
+    pub fn with_log_events(
+        log_buffer: Arc<Mutex<LogBuffer>>,
+        log_event_tx: mpsc::UnboundedSender<LogLineEvent>,
+    ) -> Self {
+        Self {
+            processes: HashMap::new(),
+            log_buffer,
+            log_event_tx: Some(log_event_tx),
         }
     }
 
@@ -65,6 +87,10 @@ impl ProcessManager {
         if let Some(process) = self.processes.get(service_name) {
             if matches!(process.status, ServiceStatus::Starting | ServiceStatus::Running) {
                 return Err(ProcessError::AlreadyRunning(service_name.to_string()));
+            }
+            // If service is stopped or failed, remove it so we can spawn a new one
+            if matches!(process.status, ServiceStatus::Stopped | ServiceStatus::Failed { .. }) {
+                self.processes.remove(service_name);
             }
         }
 
@@ -94,11 +120,15 @@ impl ProcessManager {
             command.env(key, value);
         }
 
-        // Pipe stdout and stderr
+        // Pipe stdout, stderr AND stdin
+        command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
 
         let mut child = command.spawn()?;
+
+        // Get stdin handle
+        let stdin = child.stdin.take();
 
         // Get stdout and stderr handles
         let stdout = child.stdout.take().ok_or_else(|| {
@@ -119,6 +149,7 @@ impl ProcessManager {
         let managed_process = ManagedProcess {
             service_name: service_name.to_string(),
             child,
+            stdin,
             status: ServiceStatus::Starting,
             started_at: SystemTime::now(),
             env_vars: env_vars.clone(),
@@ -129,25 +160,28 @@ impl ProcessManager {
         // Spawn async tasks to read stdout and stderr
         let service_name_clone = service_name.to_string();
         let log_buffer_clone = Arc::clone(&self.log_buffer);
+        let log_event_tx_clone = self.log_event_tx.clone();
         tokio::spawn(async move {
-            Self::stream_output(service_name_clone, stdout, LogStream::Stdout, log_buffer_clone).await;
+            Self::stream_output(service_name_clone, stdout, LogStream::Stdout, log_buffer_clone, log_event_tx_clone).await;
         });
 
         let service_name_clone = service_name.to_string();
         let log_buffer_clone = Arc::clone(&self.log_buffer);
+        let log_event_tx_clone = self.log_event_tx.clone();
         tokio::spawn(async move {
-            Self::stream_output(service_name_clone, stderr, LogStream::Stderr, log_buffer_clone).await;
+            Self::stream_output(service_name_clone, stderr, LogStream::Stderr, log_buffer_clone, log_event_tx_clone).await;
         });
 
         Ok(())
     }
 
-    /// Stream output from stdout or stderr to the log buffer
+    /// Stream output from stdout or stderr to the log buffer and emit events
     async fn stream_output<R>(
         service_name: String,
         reader: R,
         stream: LogStream,
         log_buffer: Arc<Mutex<LogBuffer>>,
+        log_event_tx: Option<mpsc::UnboundedSender<LogLineEvent>>,
     ) where
         R: tokio::io::AsyncRead + Unpin,
     {
@@ -160,8 +194,21 @@ impl ProcessManager {
                 stream: stream.clone(),
             };
 
-            let mut buffer = log_buffer.lock().await;
-            buffer.append(&service_name, log_line);
+            // Store in log buffer
+            {
+                let mut buffer = log_buffer.lock().await;
+                buffer.append(&service_name, log_line.clone());
+            }
+
+            // Emit log event if sender is available
+            if let Some(ref tx) = log_event_tx {
+                let event = LogLineEvent {
+                    service: service_name.clone(),
+                    line: log_line,
+                };
+                // Ignore send errors - receiver may have been dropped
+                let _ = tx.send(event);
+            }
         }
     }
 
@@ -172,7 +219,8 @@ impl ProcessManager {
 
         // Check if process is actually running
         if matches!(process.status, ServiceStatus::Stopped | ServiceStatus::Failed { .. }) {
-            return Err(ProcessError::NotRunning(service_name.to_string()));
+            // Already stopped, just return success
+            return Ok(());
         }
 
         // Try graceful shutdown with SIGTERM (or equivalent on Windows)
@@ -238,6 +286,25 @@ impl ProcessManager {
         Ok(())
     }
 
+    /// Write data to a service's stdin
+    pub async fn write_stdin(&mut self, service_name: &str, data: &str) -> Result<(), ProcessError> {
+        let process = self.processes.get_mut(service_name)
+            .ok_or_else(|| ProcessError::ServiceNotFound(service_name.to_string()))?;
+
+        if let Some(stdin) = &mut process.stdin {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(data.as_bytes()).await?;
+            stdin.flush().await?;
+            Ok(())
+        } else {
+            // Process might be running but stdin capture failed or wasn't set up
+            Err(ProcessError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Stdin not available for this service",
+            )))
+        }
+    }
+
     /// Get the current status of a service
     pub fn get_status(&self, service_name: &str) -> Option<ServiceStatus> {
         self.processes.get(service_name).map(|p| p.status.clone())
@@ -269,17 +336,64 @@ impl ProcessManager {
     /// Parse a command string into program and arguments
     /// Simple implementation that splits on whitespace
     /// TODO: Handle quoted arguments properly
+    /// Parse a command string into program and arguments
+    /// Handles quoted arguments (single and double quotes)
     fn parse_command(command: &str) -> Result<Vec<String>, ProcessError> {
-        let parts: Vec<String> = command
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+        let mut args = Vec::new();
+        let mut current_arg = String::new();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut escaped = false;
 
-        if parts.is_empty() {
+        for c in command.chars() {
+            if escaped {
+                current_arg.push(c);
+                escaped = false;
+            } else if c == '\\' {
+                if in_single_quote {
+                    current_arg.push(c);
+                } else {
+                    escaped = true;
+                }
+            } else if c == '\'' {
+                if in_double_quote {
+                    current_arg.push(c);
+                } else {
+                    in_single_quote = !in_single_quote;
+                }
+            } else if c == '"' {
+                if in_single_quote {
+                    current_arg.push(c);
+                } else {
+                    in_double_quote = !in_double_quote;
+                }
+            } else if c.is_whitespace() {
+                if in_single_quote || in_double_quote {
+                    current_arg.push(c);
+                } else if !current_arg.is_empty() {
+                    args.push(current_arg);
+                    current_arg = String::new();
+                }
+            } else {
+                current_arg.push(c);
+            }
+        }
+
+        // Push the last argument if exists
+        if !current_arg.is_empty() {
+            args.push(current_arg);
+        }
+
+        if args.is_empty() {
             return Err(ProcessError::CommandParse("Command is empty".to_string()));
         }
 
-        Ok(parts)
+        // Check for unbalanced quotes
+        if in_single_quote || in_double_quote {
+            return Err(ProcessError::CommandParse("Unbalanced quotes in command".to_string()));
+        }
+
+        Ok(args)
     }
 }
 
@@ -342,6 +456,28 @@ mod tests {
     fn test_parse_command_empty() {
         let result = ProcessManager::parse_command("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_command_quoted() {
+        let result = ProcessManager::parse_command("node -e \"console.log('hello world')\"");
+        assert!(result.is_ok());
+        let parts = result.unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "node");
+        assert_eq!(parts[1], "-e");
+        assert_eq!(parts[2], "console.log('hello world')");
+    }
+
+    #[test]
+    fn test_parse_command_mixed_quotes() {
+        let result = ProcessManager::parse_command("echo 'hello \"world\"' \"foo 'bar'\"");
+        assert!(result.is_ok());
+        let parts = result.unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "echo");
+        assert_eq!(parts[1], "hello \"world\"");
+        assert_eq!(parts[2], "foo 'bar'");
     }
 
     #[test]
@@ -591,8 +727,8 @@ mod tests {
         manager.update_status("test_service", ServiceStatus::Stopped);
 
         let result = manager.stop_service("test_service").await;
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ProcessError::NotRunning(_)));
+        // Should be idempotent and return Ok even if already stopped
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

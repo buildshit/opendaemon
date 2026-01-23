@@ -1,0 +1,12 @@
+{
+    "version": "1.0",
+    "services": {
+        "simple-test": {
+            "command": "node -e \"console.log('Hello World'); console.log('Service Ready'); setTimeout(() => {}, 5000);\"",
+            "ready_when": {
+                "type": "log_contains",
+                "pattern": "Service Ready"
+            }
+        }
+    }
+}

@@ -338,7 +338,7 @@ suite('Command Palette with No Services Tests', () => {
         const testCommandManager = new CommandManager(
             mockContext as any,
             () => mockRpcClient as any,
-            mockLogManager as unknown,
+            mockLogManager as any,
             () => emptyTreeProvider,
             async () => { },
             () => null,

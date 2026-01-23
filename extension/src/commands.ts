@@ -2,9 +2,14 @@ import * as vscode from 'vscode';
 import { RpcClient } from './rpc-client';
 import { ServiceTreeItem, ServiceInfo } from './tree-view';
 import { LogManager } from './logs';
-import { ErrorDisplayManager } from './error-display';
+import { ErrorDisplayManager, ErrorCategory } from './error-display';
+import { TerminalManager } from './terminal-manager';
+import { ActivityLogger } from './activity-logger';
 
 export class CommandManager {
+    private terminalManager: TerminalManager;
+    private activityLogger: ActivityLogger | null;
+
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly getRpcClient: () => RpcClient | null,
@@ -12,8 +17,13 @@ export class CommandManager {
         private readonly getTreeDataProvider: () => { getAllServices(): ServiceInfo[] } | null,
         private readonly refreshServices: () => Promise<void>,
         private readonly getErrorDisplayManager?: () => ErrorDisplayManager | null,
-        private readonly getConfigPath?: () => string | null
-    ) { }
+        private readonly getConfigPath?: () => string | null,
+        activityLogger?: ActivityLogger | null
+    ) {
+        this.activityLogger = activityLogger || null;
+        this.terminalManager = new TerminalManager(this.activityLogger || undefined);
+        context.subscriptions.push(this.terminalManager);
+    }
 
     /**
      * Register all commands
@@ -52,6 +62,13 @@ export class CommandManager {
             vscode.commands.registerCommand(
                 'opendaemon.showLogs',
                 (item: ServiceTreeItem) => this.showLogs(item)
+            )
+        );
+
+        this.context.subscriptions.push(
+            vscode.commands.registerCommand(
+                'opendaemon.showTerminal',
+                (item: ServiceTreeItem) => this.showTerminal(item)
             )
         );
 
@@ -147,6 +164,20 @@ export class CommandManager {
         }
 
         try {
+            // Log the action
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction('all', 'Starting all services');
+            }
+
+            // Get all services to create terminals for them
+            const treeDataProvider = this.getTreeDataProvider();
+            const services = treeDataProvider ? treeDataProvider.getAllServices() : [];
+
+            // Create terminals for all services BEFORE starting
+            for (const service of services) {
+                this.terminalManager.getOrCreateTerminal(service.name);
+            }
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -158,10 +189,27 @@ export class CommandManager {
                 }
             );
 
+            // Show terminals for all services
+            for (const service of services) {
+                this.terminalManager.showTerminal(service.name, true);
+            }
+
             vscode.window.showInformationMessage('All services started');
+            
+            // Log success
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction('all', 'All services started successfully');
+            }
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error
+            if (this.activityLogger) {
+                this.activityLogger.logError('startAll()', errorMessage);
+            }
+            
             vscode.window.showErrorMessage(
-                `Failed to start services: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to start services: ${errorMessage}`
             );
         }
     }
@@ -177,6 +225,11 @@ export class CommandManager {
         }
 
         try {
+            // Log the action
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction('all', 'Stopping all services');
+            }
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -189,9 +242,21 @@ export class CommandManager {
             );
 
             vscode.window.showInformationMessage('All services stopped');
+            
+            // Log success
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction('all', 'All services stopped successfully');
+            }
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error
+            if (this.activityLogger) {
+                this.activityLogger.logError('stopAll()', errorMessage);
+            }
+            
             vscode.window.showErrorMessage(
-                `Failed to stop services: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to stop services: ${errorMessage}`
             );
         }
     }
@@ -212,6 +277,14 @@ export class CommandManager {
         }
 
         try {
+            // Log the action
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Starting service');
+            }
+
+            // Create terminal BEFORE starting service so logs appear immediately
+            this.terminalManager.getOrCreateTerminal(targetItem.serviceName);
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -223,10 +296,25 @@ export class CommandManager {
                 }
             );
 
+            // Show terminal after service starts
+            this.terminalManager.showTerminal(targetItem.serviceName, true);
+
             vscode.window.showInformationMessage(`Service ${targetItem.serviceName} started`);
+            
+            // Log success
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Service started successfully');
+            }
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error
+            if (this.activityLogger) {
+                this.activityLogger.logError(`startService(${targetItem.serviceName})`, errorMessage);
+            }
+            
             vscode.window.showErrorMessage(
-                `Failed to start ${targetItem.serviceName}: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to start ${targetItem.serviceName}: ${errorMessage}`
             );
         }
     }
@@ -247,6 +335,11 @@ export class CommandManager {
         }
 
         try {
+            // Log the action
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Stopping service');
+            }
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -259,9 +352,21 @@ export class CommandManager {
             );
 
             vscode.window.showInformationMessage(`Service ${targetItem.serviceName} stopped`);
+            
+            // Log success
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Service stopped successfully');
+            }
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error
+            if (this.activityLogger) {
+                this.activityLogger.logError(`stopService(${targetItem.serviceName})`, errorMessage);
+            }
+            
             vscode.window.showErrorMessage(
-                `Failed to stop ${targetItem.serviceName}: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to stop ${targetItem.serviceName}: ${errorMessage}`
             );
         }
     }
@@ -282,6 +387,15 @@ export class CommandManager {
         }
 
         try {
+            // Log the action
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Restarting service');
+            }
+
+            // Close and recreate terminal for clean restart
+            this.terminalManager.closeTerminal(targetItem.serviceName);
+            this.terminalManager.getOrCreateTerminal(targetItem.serviceName);
+
             await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
@@ -293,10 +407,25 @@ export class CommandManager {
                 }
             );
 
+            // Show terminal after restart
+            this.terminalManager.showTerminal(targetItem.serviceName, true);
+
             vscode.window.showInformationMessage(`Service ${targetItem.serviceName} restarted`);
+            
+            // Log success
+            if (this.activityLogger) {
+                this.activityLogger.logServiceAction(targetItem.serviceName, 'Service restarted successfully');
+            }
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error
+            if (this.activityLogger) {
+                this.activityLogger.logError(`restartService(${targetItem.serviceName})`, errorMessage);
+            }
+            
             vscode.window.showErrorMessage(
-                `Failed to restart ${targetItem.serviceName}: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to restart ${targetItem.serviceName}: ${errorMessage}`
             );
         }
     }
@@ -310,6 +439,129 @@ export class CommandManager {
             return;
         }
         await this.logManager.showLogs(targetItem.serviceName);
+    }
+
+    /**
+     * Show terminal for a specific service
+     */
+    private async showTerminal(item?: ServiceTreeItem): Promise<void> {
+        const targetItem = await this.getServiceItem(item);
+        if (!targetItem) {
+            return;
+        }
+
+        // Log the manual terminal command invocation
+        if (this.activityLogger) {
+            this.activityLogger.logTerminalAction(
+                targetItem.serviceName,
+                'Manual terminal command invoked'
+            );
+        }
+
+        try {
+            // Show the terminal for this service (terminal remains open even if log fetch fails)
+            this.terminalManager.showTerminal(targetItem.serviceName);
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Log error to activity channel
+            if (this.activityLogger) {
+                this.activityLogger.logError(
+                    `Showing terminal for ${targetItem.serviceName}`,
+                    errorMessage
+                );
+            }
+            
+            // Log error to error display manager
+            const errorDisplayManager = this.getErrorDisplayManager?.();
+            if (errorDisplayManager) {
+                await errorDisplayManager.displayError({
+                    message: `Failed to show terminal for ${targetItem.serviceName}`,
+                    category: ErrorCategory.ORCHESTRATOR,
+                    service: targetItem.serviceName,
+                    details: errorMessage
+                });
+            }
+            
+            // Show user notification
+            vscode.window.showErrorMessage(
+                `Failed to show terminal for ${targetItem.serviceName}: ${errorMessage}`
+            );
+            
+            return;
+        }
+
+        // Fetch and display recent logs in the terminal
+        const rpcClient = this.getRpcClient();
+        if (rpcClient) {
+            try {
+                // Log the action
+                if (this.activityLogger) {
+                    this.activityLogger.logTerminalAction(
+                        targetItem.serviceName,
+                        'Fetching historical logs',
+                        'lines: 100'
+                    );
+                }
+
+                const response = await rpcClient.request('getLogs', {
+                    service: targetItem.serviceName,
+                    lines: 100
+                }) as { logs?: string[] };
+
+                if (response && response.logs && Array.isArray(response.logs)) {
+                    // Clear terminal first
+                    this.terminalManager.clearTerminal(targetItem.serviceName);
+                    
+                    // Write logs to terminal
+                    this.terminalManager.writeLines(targetItem.serviceName, response.logs);
+                    
+                    // Log success
+                    if (this.activityLogger) {
+                        this.activityLogger.logTerminalAction(
+                            targetItem.serviceName,
+                            'Historical logs fetched',
+                            `${response.logs.length} lines`
+                        );
+                    }
+                }
+            } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                
+                // Log error to activity channel
+                if (this.activityLogger) {
+                    this.activityLogger.logError(
+                        `Fetching historical logs for ${targetItem.serviceName}`,
+                        errorMessage
+                    );
+                }
+                
+                // Log error to error display manager
+                const errorDisplayManager = this.getErrorDisplayManager?.();
+                if (errorDisplayManager) {
+                    await errorDisplayManager.displayError({
+                        message: `Failed to fetch logs for ${targetItem.serviceName}`,
+                        category: ErrorCategory.RPC,
+                        service: targetItem.serviceName,
+                        details: errorMessage
+                    });
+                }
+                
+                // Show user notification
+                vscode.window.showErrorMessage(
+                    `Failed to fetch logs for ${targetItem.serviceName}: ${errorMessage}`
+                );
+                
+                // Terminal remains open for new logs to stream
+            }
+        }
+    }
+
+    /**
+     * Get the terminal manager instance
+     */
+    getTerminalManager(): TerminalManager {
+        return this.terminalManager;
     }
 
     /**

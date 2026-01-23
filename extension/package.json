@@ -57,6 +57,12 @@
         "icon": "$(output)"
       },
       {
+        "command": "opendaemon.showTerminal",
+        "title": "Open Terminal",
+        "category": "OpenDaemon",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "opendaemon.refresh",
         "title": "Refresh Services",
         "category": "OpenDaemon",
@@ -109,6 +115,11 @@
           "command": "opendaemon.showLogs",
           "when": "view == opendaemon.services && viewItem == service",
           "group": "navigation@1"
+        },
+        {
+          "command": "opendaemon.showTerminal",
+          "when": "view == opendaemon.services && viewItem == service",
+          "group": "navigation@2"
         }
       ]
     }

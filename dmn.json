@@ -5,7 +5,8 @@
             "command": "node -e \"console.log('Initializing DB...'); setTimeout(() => { console.log('Database Ready on port 5432'); setInterval(() => console.log('DB heartbeat...'), 5000); }, 2000);\"",
             "ready_when": {
                 "type": "log_contains",
-                "pattern": "Database Ready"
+                "pattern": "Database Ready",
+                "timeout_seconds": 10
             }
         },
         "backend-api": {
@@ -15,7 +16,8 @@
             ],
             "ready_when": {
                 "type": "log_contains",
-                "pattern": "API Server running"
+                "pattern": "API Server running",
+                "timeout_seconds": 10
             }
         },
         "frontend": {
@@ -25,7 +27,8 @@
             ],
             "ready_when": {
                 "type": "log_contains",
-                "pattern": "Frontend available"
+                "pattern": "Frontend available",
+                "timeout_seconds": 10
             }
         }
     }

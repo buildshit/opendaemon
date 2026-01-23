@@ -539,7 +539,7 @@ async fn test_event_emission() {
     };
     
     let mut orchestrator = Orchestrator::new(config).unwrap();
-    let _event_sender = orchestrator.subscribe_events();
+    let _event_receiver = orchestrator.subscribe_events();
     
     // Start the service
     orchestrator.start_service_with_deps("test_service").await.unwrap();

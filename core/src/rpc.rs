@@ -280,35 +280,30 @@ impl RpcServer {
 
     /// Stream orchestrator events as JSON-RPC notifications
     async fn stream_events(orchestrator: Arc<Mutex<Orchestrator>>) {
-        // Subscribe to events
-        let _event_tx = {
+        // Subscribe to events from the orchestrator's broadcast channel
+        let mut event_rx = {
             let orch = orchestrator.lock().await;
             orch.subscribe_events()
         };
 
-        // Create a receiver for events
-        let (_tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        
-        // Forward events from orchestrator to our receiver
-        tokio::spawn(async move {
-            // We need to poll the orchestrator's event channel
-            // Since we can't directly access event_rx, we'll use the event_tx to create a new receiver
-            // This is a limitation - in a real implementation, we'd need to refactor the Orchestrator
-            // to allow multiple subscribers or expose the event receiver
-            
-            // For now, we'll just keep the channel open
-            // In practice, the orchestrator emits events via event_tx, and we'd need to
-            // have the orchestrator forward events to multiple subscribers
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        });
-
-        // Send events as notifications
-        while let Some(event) = rx.recv().await {
-            let notification = Self::event_to_notification(event);
-            if let Err(e) = Self::send_notification(notification).await {
-                eprintln!("Error sending notification: {}", e);
+        // Process events and send as notifications
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    let notification = Self::event_to_notification(event);
+                    if let Err(e) = Self::send_notification(notification).await {
+                        eprintln!("Error sending notification: {}", e);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    // Some events were missed due to slow processing
+                    eprintln!("Warning: Missed {} events due to lag", count);
+                    // Continue processing - we'll catch up
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Channel closed - orchestrator was dropped
+                    break;
+                }
             }
         }
     }
@@ -1295,8 +1290,8 @@ mod tests {
         };
         let orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
         
-        // Get event sender
-        let event_tx = orchestrator.subscribe_events();
+        // Get event sender (for emitting events)
+        let event_tx = orchestrator.event_sender();
         
         // Send a test event
         let test_event = OrchestratorEvent::ServiceStarting {

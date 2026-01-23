@@ -17,6 +17,6 @@ pub use graph::ServiceGraph;
 pub use logs::{LogBuffer, LogLine, LogLineCount, LogStream};
 pub use mcp_server::{DmnMcpServer, McpToolCall, McpToolResult};
 pub use orchestrator::{Orchestrator, OrchestratorEvent};
-pub use process::{ManagedProcess, ProcessManager, ServiceStatus};
+pub use process::{LogLineEvent, ManagedProcess, ProcessManager, ServiceStatus};
 pub use ready::ReadyWatcher;
 pub use rpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LogLinesParam, RpcRequest, RpcServer};

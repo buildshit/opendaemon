@@ -10,6 +10,7 @@ import { ConfigWizard } from './wizard';
 import { DmnFileWatcher } from './file-watcher';
 import { ErrorDisplayManager, ErrorCategory } from './error-display';
 import { LogDocumentProvider } from './log-document-provider';
+import { ActivityLogger } from './activity-logger';
 
 let daemonManager: DaemonManager | null = null;
 let rpcClient: RpcClient | null = null;
@@ -20,12 +21,18 @@ let fileWatcher: DmnFileWatcher | null = null;
 let errorDisplayManager: ErrorDisplayManager | null = null;
 let extensionContext: vscode.ExtensionContext | null = null;
 let logDocumentProvider: LogDocumentProvider | null = null;
+let activityLogger: ActivityLogger | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('OpenDaemon extension is now active');
 
     // Store context for use in other functions
     extensionContext = context;
+
+    // Initialize activity logger
+    activityLogger = new ActivityLogger();
+    context.subscriptions.push(activityLogger);
+    activityLogger.log('Extension activated');
 
     // Initialize error display manager
     errorDisplayManager = new ErrorDisplayManager({
@@ -67,7 +74,8 @@ export async function activate(context: vscode.ExtensionContext) {
         () => treeDataProvider,
         async () => await loadServices(),
         () => errorDisplayManager,
-        () => fileWatcher?.getConfigPath() ?? null
+        () => fileWatcher?.getConfigPath() ?? null,
+        activityLogger
     );
     commandManager.registerCommands();
 
@@ -92,6 +100,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export async function deactivate() {
     console.log('OpenDaemon extension is now deactivated');
+
+    // Log deactivation before disposing
+    if (activityLogger) {
+        activityLogger.log('Extension deactivated');
+    }
 
     if (fileWatcher) {
         fileWatcher.stop();
@@ -121,6 +134,11 @@ export async function deactivate() {
     if (treeDataProvider) {
         treeDataProvider.clear();
         treeDataProvider = null;
+    }
+
+    if (activityLogger) {
+        activityLogger.dispose();
+        activityLogger = null;
     }
 }
 
@@ -158,7 +176,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         if (daemonManager) {
             daemonManager.write(data);
         }
-    });
+    }, activityLogger);
 
     // Listen for notifications from daemon
     rpcClient.on('notification', (method, params) => {
@@ -537,86 +555,181 @@ function handleDaemonStderr(data: string): void {
     }
 }
 
+// Throttle log line activity logging to once per second per service
+const lastLogTime = new Map<string, number>();
+
+/**
+ * Helper function to determine if we should log activity for a log line
+ * Throttles to max once per second per service to avoid spam
+ */
+function shouldLogLine(service: string): boolean {
+    const now = Date.now();
+    const last = lastLogTime.get(service) || 0;
+    if (now - last > 1000) {
+        lastLogTime.set(service, now);
+        return true;
+    }
+    return false;
+}
+
 /**
  * Handle notifications from daemon
  */
 function handleDaemonNotification(method: string, params: unknown): void {
     console.log('[Daemon notification]:', method, params);
 
-    // Handle error events
-    if (method === 'error') {
-        const { message, category } = params as {
-            message: string;
-            category: string;
-        };
+    try {
+        // Log all notifications to activity channel
+        if (activityLogger) {
+            activityLogger.logRpcAction(method, 'notification', JSON.stringify(params));
+        }
 
+        // Handle error events
+        if (method === 'error') {
+            const { message, category } = params as {
+                message: string;
+                category: string;
+            };
+
+            if (errorDisplayManager) {
+                errorDisplayManager.displayError({
+                    message,
+                    category: category as ErrorCategory
+                });
+            }
+            
+            // Log error notification
+            if (activityLogger) {
+                activityLogger.logError('Daemon notification', message);
+            }
+            return;
+        }
+
+        // Handle service status changes
+        if (method === 'ServiceStatusChanged' && treeDataProvider) {
+            const { service, status, exit_code } = params as {
+                service: string;
+                status: string;
+                exit_code?: number;
+            };
+
+            treeDataProvider.updateServiceStatus(
+                service,
+                parseServiceStatus(status),
+                exit_code
+            );
+            
+            // Log service status change
+            if (activityLogger) {
+                const details = `new status: ${status}${exit_code !== undefined ? `, exit code: ${exit_code}` : ''}`;
+                activityLogger.logServiceAction(service, 'Status changed', details);
+            }
+        }
+
+        // Handle service starting
+        if (method === 'serviceStarting' && treeDataProvider) {
+            const { service } = params as { service: string };
+            treeDataProvider.updateServiceStatus(service, ServiceStatus.Starting);
+            
+            // Log service starting
+            if (activityLogger) {
+                activityLogger.logServiceAction(service, 'Starting');
+            }
+        }
+
+        // Handle service ready
+        if (method === 'serviceReady' && treeDataProvider) {
+            const { service } = params as { service: string };
+            treeDataProvider.updateServiceStatus(service, ServiceStatus.Running);
+            
+            // Log service ready
+            if (activityLogger) {
+                activityLogger.logServiceAction(service, 'Ready');
+            }
+        }
+
+        // Handle service failed
+        if (method === 'serviceFailed' && treeDataProvider) {
+            const { service, error } = params as { service: string; error: string };
+            treeDataProvider.updateServiceStatus(service, ServiceStatus.Failed);
+
+            // Show error notification using error display manager
+            if (errorDisplayManager) {
+                errorDisplayManager.displayServiceFailure(service, error);
+            }
+            
+            // Log service failure
+            if (activityLogger) {
+                activityLogger.logServiceAction(service, 'Failed', error);
+            }
+        }
+
+        // Handle service stopped
+        if (method === 'serviceStopped' && treeDataProvider) {
+            const { service } = params as { service: string };
+            treeDataProvider.updateServiceStatus(service, ServiceStatus.Stopped);
+            
+            // Log service stopped
+            if (activityLogger) {
+                activityLogger.logServiceAction(service, 'Stopped');
+            }
+        }
+
+        // Handle log lines - route to BOTH LogManager and TerminalManager
+        if (method === 'logLine') {
+            const { service, timestamp, content, stream } = params as {
+                service: string;
+                timestamp: number;
+                content: string;
+                stream: string;
+            };
+
+            const logLine: LogLine = {
+                timestamp: new Date(timestamp * 1000).toISOString(),
+                content,
+                stream: stream as 'stdout' | 'stderr'
+            };
+
+            // Route to LogManager for editor-based viewing
+            if (logManager) {
+                logManager.appendLogLine(service, logLine);
+            }
+
+            // Route to TerminalManager for terminal-based viewing
+            if (commandManager) {
+                const terminalManager = commandManager.getTerminalManager();
+                terminalManager.writeLogLine(service, logLine);
+            }
+            
+            // Log activity (throttled to avoid spam)
+            if (activityLogger && shouldLogLine(service)) {
+                activityLogger.logTerminalAction(
+                    service,
+                    'Log line received',
+                    `stream: ${stream}, length: ${content.length}`
+                );
+            }
+        }
+    } catch (err) {
+        // Log notification processing errors
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        
+        if (activityLogger) {
+            activityLogger.logError(
+                `Processing notification ${method}`,
+                errorMsg
+            );
+        }
+        
         if (errorDisplayManager) {
             errorDisplayManager.displayError({
-                message,
-                category: category as ErrorCategory
+                message: `Failed to process daemon notification: ${method}`,
+                category: ErrorCategory.RPC,
+                details: errorMsg
             });
         }
-        return;
-    }
-
-    // Handle service status changes
-    if (method === 'ServiceStatusChanged' && treeDataProvider) {
-        const { service, status, exit_code } = params as {
-            service: string;
-            status: string;
-            exit_code?: number;
-        };
-
-        treeDataProvider.updateServiceStatus(
-            service,
-            parseServiceStatus(status),
-            exit_code
-        );
-    }
-
-    // Handle service starting
-    if (method === 'serviceStarting' && treeDataProvider) {
-        const { service } = params as { service: string };
-        treeDataProvider.updateServiceStatus(service, ServiceStatus.Starting);
-    }
-
-    // Handle service ready
-    if (method === 'serviceReady' && treeDataProvider) {
-        const { service } = params as { service: string };
-        treeDataProvider.updateServiceStatus(service, ServiceStatus.Running);
-    }
-
-    // Handle service failed
-    if (method === 'serviceFailed' && treeDataProvider) {
-        const { service, error } = params as { service: string; error: string };
-        treeDataProvider.updateServiceStatus(service, ServiceStatus.Failed);
-
-        // Show error notification using error display manager
-        if (errorDisplayManager) {
-            errorDisplayManager.displayServiceFailure(service, error);
-        }
-    }
-
-    // Handle service stopped
-    if (method === 'serviceStopped' && treeDataProvider) {
-        const { service } = params as { service: string };
-        treeDataProvider.updateServiceStatus(service, ServiceStatus.Stopped);
-    }
-
-    // Handle log lines
-    if (method === 'logLine' && logManager) {
-        const { service, timestamp, content, stream } = params as {
-            service: string;
-            timestamp: number;
-            content: string;
-            stream: string;
-        };
-
-        logManager.appendLogLine(service, {
-            timestamp: new Date(timestamp * 1000).toISOString(),
-            content,
-            stream: stream as 'stdout' | 'stderr'
-        });
+        
+        console.error('[handleDaemonNotification] Error processing notification:', err);
     }
 }
 

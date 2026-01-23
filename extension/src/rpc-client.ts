@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { ActivityLogger } from './activity-logger';
 
 export interface RpcRequest {
     jsonrpc: '2.0';
@@ -37,7 +38,10 @@ export class RpcClient extends EventEmitter {
     private pendingRequests = new Map<number, PendingRequest>();
     private readonly requestTimeout = 120000; // 120 seconds
 
-    constructor(private readonly write: (data: string) => void) {
+    constructor(
+        private readonly write: (data: string) => void,
+        private readonly activityLogger?: ActivityLogger | null
+    ) {
         super();
     }
 
@@ -54,11 +58,27 @@ export class RpcClient extends EventEmitter {
             params
         };
 
+        // Log the outgoing request
+        if (this.activityLogger) {
+            this.activityLogger.logRpcAction(
+                method,
+                'request',
+                `id: ${id}, params: ${JSON.stringify(params)}`
+            );
+        }
+
         return new Promise((resolve, reject) => {
             // Set up timeout
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
-                reject(new Error(`Request timeout: ${method}`));
+                
+                // Log timeout error
+                const error = `Request timeout: ${method}`;
+                if (this.activityLogger) {
+                    this.activityLogger.logError(`RPC request ${method} (id: ${id})`, error);
+                }
+                
+                reject(new Error(error));
             }, this.requestTimeout);
 
             // Store pending request
@@ -120,10 +140,24 @@ export class RpcClient extends EventEmitter {
         clearTimeout(pending.timeout);
         this.pendingRequests.delete(response.id);
 
-        // Resolve or reject based on response
+        // Log the response
         if (response.error) {
+            if (this.activityLogger) {
+                this.activityLogger.logRpcAction(
+                    'unknown',
+                    'response',
+                    `id: ${response.id}, error: ${JSON.stringify(response.error)}`
+                );
+            }
             pending.reject(new Error(response.error.message));
         } else {
+            if (this.activityLogger) {
+                this.activityLogger.logRpcAction(
+                    'unknown',
+                    'response',
+                    `id: ${response.id}, success`
+                );
+            }
             pending.resolve(response.result);
         }
     }

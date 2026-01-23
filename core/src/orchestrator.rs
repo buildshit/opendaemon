@@ -1,12 +1,12 @@
 use crate::config::DmnConfig;
 use crate::graph::{GraphError, ServiceGraph};
 use crate::logs::{LogBuffer, LogLine};
-use crate::process::{ProcessError, ProcessManager};
+use crate::process::{LogLineEvent, ProcessError, ProcessManager};
 use crate::ready::ReadyWatcher;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 
 #[derive(Debug, Clone)]
 pub enum OrchestratorEvent {
@@ -38,8 +38,7 @@ pub struct Orchestrator {
     pub process_manager: ProcessManager,
     pub log_buffer: Arc<Mutex<LogBuffer>>,
     ready_watcher: Arc<Mutex<ReadyWatcher>>,
-    event_tx: mpsc::UnboundedSender<OrchestratorEvent>,
-    event_rx: Arc<Mutex<mpsc::UnboundedReceiver<OrchestratorEvent>>>,
+    event_tx: broadcast::Sender<OrchestratorEvent>,
 }
 
 impl std::fmt::Debug for Orchestrator {
@@ -50,8 +49,7 @@ impl std::fmt::Debug for Orchestrator {
             .field("process_manager", &"<ProcessManager>")
             .field("log_buffer", &"<Arc<Mutex<LogBuffer>>>")
             .field("ready_watcher", &"<Arc<Mutex<ReadyWatcher>>>")
-            .field("event_tx", &"<mpsc::UnboundedSender>")
-            .field("event_rx", &"<Arc<Mutex<mpsc::UnboundedReceiver>>>")
+            .field("event_tx", &"<broadcast::Sender>")
             .finish()
     }
 }
@@ -66,14 +64,31 @@ impl Orchestrator {
         // Create log buffer
         let log_buffer = Arc::new(Mutex::new(LogBuffer::new(1000)));
         
-        // Create process manager
-        let process_manager = ProcessManager::new(Arc::clone(&log_buffer));
+        // Create broadcast event channel for orchestrator events
+        // Capacity of 1000 should be enough for most use cases
+        let (event_tx, _) = broadcast::channel(1000);
+        
+        // Create log event channel for real-time log forwarding
+        let (log_event_tx, mut log_event_rx) = mpsc::unbounded_channel::<LogLineEvent>();
+        
+        // Create process manager with log event sender
+        let process_manager = ProcessManager::with_log_events(Arc::clone(&log_buffer), log_event_tx);
         
         // Create ready watcher with default timeout of 60 seconds
         let ready_watcher = Arc::new(Mutex::new(ReadyWatcher::new(Duration::from_secs(60))));
         
-        // Create event channel for orchestrator events
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        // Spawn task to forward log events to the main event channel
+        let event_tx_for_logs = event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(log_event) = log_event_rx.recv().await {
+                let orch_event = OrchestratorEvent::LogLine {
+                    service: log_event.service,
+                    line: log_event.line,
+                };
+                // Ignore send errors - no receivers may be subscribed yet
+                let _ = event_tx_for_logs.send(orch_event);
+            }
+        });
         
         Ok(Self {
             config,
@@ -82,13 +97,18 @@ impl Orchestrator {
             log_buffer,
             ready_watcher,
             event_tx,
-            event_rx: Arc::new(Mutex::new(event_rx)),
         })
     }
     
-    /// Get a receiver for orchestrator events
-    /// This allows external consumers to listen to events
-    pub fn subscribe_events(&self) -> mpsc::UnboundedSender<OrchestratorEvent> {
+    /// Subscribe to orchestrator events
+    /// Returns a receiver that will receive all events emitted by the orchestrator
+    /// Multiple subscribers can receive events simultaneously (broadcast)
+    pub fn subscribe_events(&self) -> broadcast::Receiver<OrchestratorEvent> {
+        self.event_tx.subscribe()
+    }
+    
+    /// Get a sender for emitting events from outside the orchestrator
+    pub fn event_sender(&self) -> broadcast::Sender<OrchestratorEvent> {
         self.event_tx.clone()
     }
     
@@ -248,39 +268,40 @@ impl Orchestrator {
                 }
             };
             
-            // Watch for readiness in a separate task
-            let service_name_clone = service_name.to_string();
-            let ready_condition_clone = ready_condition.clone();
-            let ready_watcher = Arc::clone(&self.ready_watcher);
-            let event_tx = self.event_tx.clone();
+            // Watch for readiness synchronously (with timeout)
+            // This ensures the service is fully started (or failed) before we return
+            let result = {
+                let mut watcher = self.ready_watcher.lock().await;
+                watcher.watch_service_with_timeout(
+                    service_name.to_string(),
+                    ready_condition.clone(),
+                    Some(log_rx),
+                    custom_timeout,
+                ).await
+            };
             
-            tokio::spawn(async move {
-                let result = {
-                    let mut watcher = ready_watcher.lock().await;
-                    watcher.watch_service_with_timeout(
-                        service_name_clone.clone(),
-                        ready_condition_clone,
-                        Some(log_rx),
-                        custom_timeout,
-                    ).await
-                };
-                
-                match result {
-                    Ok(_) => {
-                        // Emit ready event
-                        let _ = event_tx.send(OrchestratorEvent::ServiceReady {
-                            service: service_name_clone,
-                        });
-                    }
-                    Err(e) => {
-                        // Emit failed event
-                        let _ = event_tx.send(OrchestratorEvent::ServiceFailed {
-                            service: service_name_clone,
-                            error: e.to_string(),
-                        });
-                    }
+            match result {
+                Ok(_) => {
+                    // Service is ready
+                    self.process_manager.update_status(service_name, crate::process::ServiceStatus::Running);
+                    self.emit_event(OrchestratorEvent::ServiceReady {
+                        service: service_name.to_string(),
+                    });
                 }
-            });
+                Err(e) => {
+                    // Ready check failed - stop the process and mark as failed
+                    let _ = self.process_manager.stop_service(service_name).await;
+                    self.process_manager.update_status(service_name, crate::process::ServiceStatus::Failed { exit_code: -1 });
+                    
+                    self.emit_event(OrchestratorEvent::ServiceFailed {
+                        service: service_name.to_string(),
+                        error: e.to_string(),
+                    });
+                    
+                    // Return error so caller knows the service failed to start properly
+                    return Err(OrchestratorError::ReadyError(e.to_string()));
+                }
+            }
         } else {
             // No ready condition - mark as ready immediately
             {
@@ -550,7 +571,8 @@ mod tests {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config).unwrap();
         
-        let event_sender = orchestrator.subscribe_events();
+        // Test that we can get a sender for emitting events
+        let event_sender = orchestrator.event_sender();
         
         // Test that we can send events
         let test_event = OrchestratorEvent::ServiceStarting {
@@ -558,6 +580,19 @@ mod tests {
         };
         
         assert!(event_sender.send(test_event).is_ok());
+        
+        // Test that we can subscribe to receive events
+        let mut event_receiver = orchestrator.subscribe_events();
+        
+        // Send another event
+        let test_event2 = OrchestratorEvent::ServiceReady {
+            service: "test".to_string(),
+        };
+        event_sender.send(test_event2).unwrap();
+        
+        // Verify we can receive events (non-blocking check - may or may not have event yet)
+        // Just verify the channel is working
+        drop(event_receiver);
     }
 
     #[test]
