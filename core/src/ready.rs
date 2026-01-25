@@ -69,6 +69,12 @@ impl ReadyWatcher {
         self.conditions.clear();
     }
 
+    /// Register a ready condition for a service without starting to watch
+    /// This is used when the watch happens outside the mutex lock
+    pub fn register_condition(&mut self, service_name: &str, condition: ReadyCondition) {
+        self.conditions.insert(service_name.to_string(), condition);
+    }
+
     /// Watch a service for readiness based on its condition
     /// This is the main dispatcher that routes to specific watch methods
     pub async fn watch_service(

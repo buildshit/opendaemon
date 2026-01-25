@@ -213,6 +213,12 @@ impl ProcessManager {
     }
 
     /// Stop a service gracefully with SIGTERM, then force kill if needed
+    /// 
+    /// NOTE: When stop_service is called explicitly, the service is always marked as
+    /// `Stopped` regardless of exit code. This is because killed processes often have
+    /// non-zero exit codes (e.g., 130 for SIGINT, 137 for SIGKILL on Unix, or various
+    /// codes on Windows). The `Failed` status should only be used when a process
+    /// terminates unexpectedly on its own with an error.
     pub async fn stop_service(&mut self, service_name: &str) -> Result<(), ProcessError> {
         let process = self.processes.get_mut(service_name)
             .ok_or_else(|| ProcessError::ServiceNotFound(service_name.to_string()))?;
@@ -244,15 +250,12 @@ impl ProcessManager {
         let wait_result = timeout(Duration::from_secs(10), process.child.wait()).await;
 
         match wait_result {
-            Ok(Ok(exit_status)) => {
+            Ok(Ok(_exit_status)) => {
                 // Process exited within timeout
-                if exit_status.success() {
-                    process.status = ServiceStatus::Stopped;
-                } else {
-                    process.status = ServiceStatus::Failed {
-                        exit_code: exit_status.code().unwrap_or(-1),
-                    };
-                }
+                // Always mark as Stopped when stop_service is called explicitly,
+                // regardless of exit code. Killed processes often have non-zero
+                // exit codes which doesn't mean they "failed".
+                process.status = ServiceStatus::Stopped;
                 Ok(())
             }
             Ok(Err(e)) => {
@@ -758,9 +761,10 @@ mod tests {
         let result = manager.stop_service("test_service").await;
         assert!(result.is_ok());
 
-        // Check status was updated
+        // Check status was updated - should always be Stopped when stop_service is called
+        // explicitly, regardless of exit code (killed processes have non-zero exit codes)
         let status = manager.get_status("test_service").unwrap();
-        assert!(matches!(status, ServiceStatus::Stopped | ServiceStatus::Failed { .. }));
+        assert_eq!(status, ServiceStatus::Stopped);
     }
 
     #[tokio::test]

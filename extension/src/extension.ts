@@ -209,10 +209,12 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         await daemonManager.start(dmnConfigPath);
         console.log('[OpenDaemon] Daemon started successfully');
 
-        // Step 6: Set up stdin writer for terminals
-        console.log('[OpenDaemon] Step 6: Configuring terminal stdin writer...');
+        // Step 6: Set up stdin writer and close handler for terminals
+        console.log('[OpenDaemon] Step 6: Configuring terminal handlers...');
         if (commandManager && rpcClient) {
             const terminalManager = commandManager.getTerminalManager();
+            
+            // Set up stdin writer for forwarding input to daemon
             terminalManager.setStdinWriter(async (serviceName: string, data: string) => {
                 if (rpcClient) {
                     try {
@@ -222,7 +224,38 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                     }
                 }
             });
-            console.log('[OpenDaemon] Terminal stdin writer configured');
+            
+            // Set up terminal close handler for two-way sync (close terminal -> stop service)
+            terminalManager.setTerminalCloseHandler(async (serviceName: string) => {
+                if (rpcClient) {
+                    try {
+                        if (activityLogger) {
+                            activityLogger.logServiceAction(serviceName, 'Stopping service (terminal closed by user)');
+                        }
+                        
+                        await rpcClient.request('stopService', { service: serviceName });
+                        
+                        // Update tree view status to NotStarted (since user closed terminal)
+                        if (treeDataProvider) {
+                            treeDataProvider.updateServiceStatus(serviceName, ServiceStatus.NotStarted);
+                        }
+                        
+                        if (activityLogger) {
+                            activityLogger.logServiceAction(serviceName, 'Service stopped (terminal closed by user)');
+                        }
+                    } catch (err) {
+                        console.error(`Failed to stop service ${serviceName} after terminal close:`, err);
+                        if (activityLogger) {
+                            activityLogger.logError(
+                                `Stopping service ${serviceName}`,
+                                err instanceof Error ? err.message : String(err)
+                            );
+                        }
+                    }
+                }
+            });
+            
+            console.log('[OpenDaemon] Terminal handlers configured');
         }
 
         // Step 7: Load actual service statuses from daemon
@@ -620,6 +653,11 @@ async function loadServices(): Promise<void> {
 /**
  * Parse service status string to enum
  * Handles both snake_case (from RPC) and PascalCase formats
+ * 
+ * NOTE: "stopped" is mapped to NotStarted because from the user's perspective,
+ * a stopped service should look the same as one that was never started -
+ * it's not running and can be started. "Stopped" as a separate state is only
+ * meaningful internally. "Failed" is reserved for services that crashed/errored.
  */
 function parseServiceStatus(statusStr: string): ServiceStatus {
     // Normalize to lowercase for comparison
@@ -636,7 +674,9 @@ function parseServiceStatus(statusStr: string): ServiceStatus {
         case 'starting':
             return ServiceStatus.Starting;
         case 'stopped':
-            return ServiceStatus.Stopped;
+            // Map stopped to NotStarted - from user's perspective, a stopped service
+            // should appear the same as one that was never started
+            return ServiceStatus.NotStarted;
         case 'not_started':
         case 'notstarted':
             return ServiceStatus.NotStarted;
@@ -805,7 +845,9 @@ function handleDaemonNotification(method: string, params: unknown): void {
         // Handle service stopped
         if (method === 'serviceStopped' && treeDataProvider) {
             const { service } = params as { service: string };
-            treeDataProvider.updateServiceStatus(service, ServiceStatus.Stopped);
+            // Use NotStarted instead of Stopped - from user's perspective, a stopped
+            // service should appear the same as one that was never started
+            treeDataProvider.updateServiceStatus(service, ServiceStatus.NotStarted);
             
             // Close the terminal for this service (do this first to ensure cleanup)
             if (commandManager) {

@@ -16,6 +16,11 @@ export interface LogLine {
 export type StdinWriter = (serviceName: string, data: string) => Promise<void>;
 
 /**
+ * Function type for handling terminal close events (to stop the service)
+ */
+export type TerminalCloseHandler = (serviceName: string) => Promise<void>;
+
+/**
  * Pseudoterminal implementation that displays service logs
  * and can forward stdin to the daemon
  */
@@ -139,26 +144,61 @@ export class TerminalManager implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
     private activityLogger: ActivityLogger | null;
     private stdinWriter: StdinWriter | null = null;
+    private terminalCloseHandler: TerminalCloseHandler | null = null;
+    // Track terminals that we're closing programmatically to avoid triggering stop
+    private closingProgrammatically: Set<string> = new Set();
 
     constructor(activityLogger?: ActivityLogger) {
         this.activityLogger = activityLogger || null;
         
-        // Listen for terminal closures to clean up our map
+        // Listen for terminal closures to clean up our map and optionally stop service
         this.disposables.push(
             vscode.window.onDidCloseTerminal((terminal) => {
-                // Find and remove the terminal from our map
+                // Find the service name for this terminal
+                let foundServiceName: string | null = null;
                 for (const [serviceName, term] of this.terminals.entries()) {
                     if (term === terminal) {
-                        this.terminals.delete(serviceName);
-                        this.pseudoterminals.delete(serviceName);
-                        
-                        // Log terminal closure
-                        if (this.activityLogger) {
-                            this.activityLogger.logTerminalAction(serviceName, 'Terminal closed by user');
-                        }
+                        foundServiceName = serviceName;
                         break;
                     }
                 }
+                
+                // If not found in our map, it might have already been cleaned up by closeTerminal
+                if (!foundServiceName) {
+                    // Check if it was a programmatic close that already cleaned up
+                    // (closingProgrammatically set would have been cleared if cleanup happened)
+                    return;
+                }
+                
+                const serviceName = foundServiceName;
+                
+                // Clean up maps
+                this.terminals.delete(serviceName);
+                this.pseudoterminals.delete(serviceName);
+                
+                // Check if this was a user-initiated close (not programmatic)
+                const wasUserClose = !this.closingProgrammatically.has(serviceName);
+                this.closingProgrammatically.delete(serviceName);
+                
+                if (wasUserClose) {
+                    // Log terminal closure by user
+                    if (this.activityLogger) {
+                        this.activityLogger.logTerminalAction(serviceName, 'Terminal closed by user - stopping service');
+                    }
+                    
+                    // Stop the service when user closes the terminal (two-way sync)
+                    if (this.terminalCloseHandler) {
+                        this.terminalCloseHandler(serviceName).catch(err => {
+                            if (this.activityLogger) {
+                                this.activityLogger.logError(
+                                    `Stopping service ${serviceName} after terminal close`,
+                                    err instanceof Error ? err.message : String(err)
+                                );
+                            }
+                        });
+                    }
+                }
+                // Note: For programmatic closes, we already logged in closeTerminal()
             })
         );
     }
@@ -168,6 +208,13 @@ export class TerminalManager implements vscode.Disposable {
      */
     setStdinWriter(writer: StdinWriter): void {
         this.stdinWriter = writer;
+    }
+
+    /**
+     * Set the terminal close handler for stopping services when terminals are closed by user
+     */
+    setTerminalCloseHandler(handler: TerminalCloseHandler): void {
+        this.terminalCloseHandler = handler;
     }
 
     /**
@@ -326,7 +373,12 @@ export class TerminalManager implements vscode.Disposable {
         }
         
         if (terminal) {
+            // Mark as closing programmatically so onDidCloseTerminal doesn't trigger stop
+            this.closingProgrammatically.add(serviceName);
             terminal.dispose();
+            
+            // Explicitly clean up maps (onDidCloseTerminal will also do this, but we do it
+            // here immediately for safety in case dispose doesn't trigger the event sync)
             this.terminals.delete(serviceName);
             this.pseudoterminals.delete(serviceName);
             
@@ -352,6 +404,8 @@ export class TerminalManager implements vscode.Disposable {
             if (pty) {
                 pty.terminate();
             }
+            // Mark as closing programmatically so onDidCloseTerminal doesn't trigger stop
+            this.closingProgrammatically.add(serviceName);
             terminal.dispose();
             
             // Log each terminal closure
@@ -359,6 +413,8 @@ export class TerminalManager implements vscode.Disposable {
                 this.activityLogger.logTerminalAction(serviceName, 'Terminal closed (cleanup)');
             }
         }
+        
+        // Clear maps explicitly (onDidCloseTerminal will also try but we do it here for safety)
         this.terminals.clear();
         this.pseudoterminals.clear();
     }

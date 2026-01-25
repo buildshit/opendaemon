@@ -314,67 +314,60 @@ impl Orchestrator {
             
             // Spawn async task to watch for readiness and emit events
             // This allows the RPC call to return immediately
+            // IMPORTANT: We DON'T hold the ready_watcher mutex during the watch!
+            // Instead, we only lock briefly to register and then to mark ready.
             let ready_watcher = Arc::clone(&self.ready_watcher);
-            let process_manager_status = service_name.to_string();
             let event_tx = self.event_tx.clone();
-            let ready_condition = ready_condition.clone();
+            let ready_condition_clone = ready_condition.clone();
             let service_name_for_ready = service_name.to_string();
+            let default_timeout = {
+                let watcher = self.ready_watcher.lock().await;
+                watcher.get_timeout()
+            };
+            let timeout_duration = custom_timeout.unwrap_or(default_timeout);
             
-            // Store process manager reference for updating status
-            // We need to use a channel to communicate back status updates
-            let (status_tx, mut status_rx) = mpsc::channel::<(String, crate::process::ServiceStatus)>(1);
-            
-            // Spawn the ready watching task
+            // Spawn the ready watching task - this does NOT hold the mutex during watch
             tokio::spawn(async move {
-                let result = {
+                // Register the condition briefly
+                {
                     let mut watcher = ready_watcher.lock().await;
-                    watcher.watch_service_with_timeout(
-                        service_name_for_ready.clone(),
-                        ready_condition,
-                        Some(log_rx),
-                        custom_timeout,
-                    ).await
-                };
+                    watcher.register_condition(&service_name_for_ready, ready_condition_clone.clone());
+                }
+                
+                // Now watch WITHOUT holding the mutex
+                let result = Self::watch_condition_standalone(
+                    ready_condition_clone,
+                    log_rx,
+                    timeout_duration,
+                ).await;
                 
                 match result {
                     Ok(_) => {
+                        // Mark as ready (brief lock)
+                        {
+                            let mut watcher = ready_watcher.lock().await;
+                            watcher.mark_ready(&service_name_for_ready);
+                        }
                         // Service is ready - emit event
-                        let _ = event_tx.send(OrchestratorEvent::ServiceReady {
+                        let send_result = event_tx.send(OrchestratorEvent::ServiceReady {
                             service: service_name_for_ready.clone(),
                         });
-                        // Send status update
-                        let _ = status_tx.send((service_name_for_ready, crate::process::ServiceStatus::Running)).await;
+                        if send_result.is_err() {
+                            eprintln!("Warning: Failed to send ServiceReady event for {} - no receivers", service_name_for_ready);
+                        }
                     }
                     Err(e) => {
                         // Ready check failed - emit failure event
-                        let _ = event_tx.send(OrchestratorEvent::ServiceFailed {
+                        let send_result = event_tx.send(OrchestratorEvent::ServiceFailed {
                             service: service_name_for_ready.clone(),
                             error: e.to_string(),
                         });
-                        // Send status update
-                        let _ = status_tx.send((service_name_for_ready, crate::process::ServiceStatus::Failed { exit_code: -1 })).await;
+                        if send_result.is_err() {
+                            eprintln!("Warning: Failed to send ServiceFailed event for {} - no receivers", service_name_for_ready);
+                        }
                     }
                 }
             });
-            
-            // Spawn another task to handle status updates from ready watcher
-            // This is a workaround since we can't easily pass ProcessManager to spawned tasks
-            let process_manager = &mut self.process_manager;
-            // We can't spawn here as we need to update process_manager synchronously
-            // Instead, we'll update status to Running after a short delay if no failure occurs
-            // The ready watcher will emit the proper events
-            
-            // For now, let's wait briefly for very fast ready conditions
-            // But don't block for long - let the async task handle it
-            tokio::select! {
-                Some((name, status)) = status_rx.recv() => {
-                    self.process_manager.update_status(&name, status);
-                }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    // Ready check is taking longer, return now
-                    // Status will be updated via the spawned task's events
-                }
-            }
         } else {
             // No ready condition - mark as ready immediately
             {
@@ -540,6 +533,130 @@ impl Orchestrator {
         }
         
         Ok(())
+    }
+    
+    /// Watch a ready condition standalone without holding any locks
+    /// This allows other operations (like getStatus) to proceed while watching
+    async fn watch_condition_standalone(
+        condition: crate::config::ReadyCondition,
+        log_rx: mpsc::Receiver<crate::logs::LogLine>,
+        timeout_duration: Duration,
+    ) -> Result<(), crate::ready::ReadyError> {
+        use crate::config::ReadyCondition;
+        use crate::ready::ReadyError;
+        use regex::Regex;
+        use tokio::time::timeout;
+        
+        match condition {
+            ReadyCondition::LogContains { pattern, .. } => {
+                let regex = Regex::new(&pattern)?;
+                let mut log_rx = log_rx;
+                let mut collected_logs: Vec<String> = Vec::new();
+                
+                let result = timeout(timeout_duration, async {
+                    while let Some(line) = log_rx.recv().await {
+                        // Keep last 10 log lines for error reporting
+                        collected_logs.push(line.content.clone());
+                        if collected_logs.len() > 10 {
+                            collected_logs.remove(0);
+                        }
+                        
+                        if regex.is_match(&line.content) {
+                            return Ok(());
+                        }
+                    }
+                    Err(ReadyError::Timeout {
+                        service: "unknown".to_string(),
+                        timeout_secs: timeout_duration.as_secs(),
+                        condition: format!("log_contains pattern: '{}'", pattern),
+                        details: if !collected_logs.is_empty() {
+                            format!("Last {} log lines:\n{}\n", 
+                                collected_logs.len(),
+                                collected_logs.iter()
+                                    .map(|l| format!("  {}", l))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            )
+                        } else {
+                            "No log output received.\n".to_string()
+                        },
+                        troubleshooting: "Troubleshooting:\n- Verify the service is producing log output\n- Check if the pattern matches the actual log format\n- Consider increasing the timeout_seconds in your dmn.json\n- Use a case-insensitive pattern with (?i) if needed".to_string(),
+                    })
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => {
+                        // Timeout occurred
+                        Err(ReadyError::Timeout {
+                            service: "unknown".to_string(),
+                            timeout_secs: timeout_duration.as_secs(),
+                            condition: format!("log_contains pattern: '{}'", pattern),
+                            details: if !collected_logs.is_empty() {
+                                format!("Last {} log lines:\n{}\n", 
+                                    collected_logs.len(),
+                                    collected_logs.iter()
+                                        .map(|l| format!("  {}", l))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                )
+                            } else {
+                                "No log output received.\n".to_string()
+                            },
+                            troubleshooting: "Troubleshooting:\n- Verify the service is producing log output\n- Check if the pattern matches the actual log format\n- Consider increasing the timeout_seconds in your dmn.json\n- Use a case-insensitive pattern with (?i) if needed".to_string(),
+                        })
+                    }
+                }
+            }
+            ReadyCondition::UrlResponds { url, .. } => {
+                let client = reqwest::Client::new();
+                let poll_interval = Duration::from_millis(500);
+                let mut last_error: Option<String> = None;
+                let mut attempt_count = 0;
+
+                let result = timeout(timeout_duration, async {
+                    loop {
+                        attempt_count += 1;
+                        match client.get(&url).send().await {
+                            Ok(response) if response.status().is_success() => {
+                                return Ok(());
+                            }
+                            Ok(response) => {
+                                last_error = Some(format!("HTTP {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown")));
+                            }
+                            Err(e) => {
+                                last_error = Some(format!("{}", e));
+                            }
+                        }
+                        tokio::time::sleep(poll_interval).await;
+                    }
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => {
+                        // Timeout occurred
+                        let details = if let Some(err) = last_error {
+                            format!("Last error after {} attempts: {}\n", attempt_count, err)
+                        } else {
+                            format!("Made {} attempts to connect.\n", attempt_count)
+                        };
+                        
+                        Err(ReadyError::Timeout {
+                            service: "unknown".to_string(),
+                            timeout_secs: timeout_duration.as_secs(),
+                            condition: format!("url_responds: '{}'", url),
+                            details,
+                            troubleshooting: "Troubleshooting:\n- Verify the service is listening on the expected URL\n- Check if the service takes longer to start than the timeout\n- Ensure there are no firewall or network issues\n- Consider increasing the timeout_seconds in your dmn.json".to_string(),
+                        })
+                    }
+                }
+            }
+        }
     }
 }
 

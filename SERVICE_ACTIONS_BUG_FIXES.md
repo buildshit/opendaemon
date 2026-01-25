@@ -293,11 +293,13 @@ pub fn ready_watcher(&self) -> &Arc<Mutex<ReadyWatcher>> {
 - [ ] Start database service → Terminal shows logs with timestamps
 - [ ] Start frontend service → Dependencies (backend-api, database) start first
 - [ ] Service shows "Starting" then "Running" status
-- [ ] Stop service → Terminal closes, status shows "Stopped"
-- [ ] **Stop All → ALL services show "Stopped" status immediately**
+- [ ] Stop service → Terminal closes, status shows "NotStarted"
+- [ ] **Stop All → ALL services show "NotStarted" status immediately**
 - [ ] **Start All → ALL services show "Starting" then "Running" status**
 - [ ] No RPC timeout errors in activity log
 - [ ] getDependencies returns correct dependencies
+- [ ] **Close terminal manually → Service stops and shows "NotStarted"**
+- [ ] **Stop a dependency → All dependents stop, all terminals close**
 
 ## Build Commands
 
@@ -313,3 +315,139 @@ npm run compile
 # Reload VS Code window to apply changes
 # Press Ctrl+Shift+P → "Developer: Reload Window"
 ```
+
+---
+
+## Round 4: Status Display and Terminal Sync Fixes
+
+### Date: January 25, 2026
+
+### Issues Reported
+
+1. **Services showing "Failed" when intentionally stopped** - When stopping a service via UI, it would show "Failed" status instead of "NotStarted"
+2. **Terminal closing doesn't stop service** - When user manually closes a terminal, the associated service should stop (two-way sync)
+3. **Database terminal stays open after stopping** - When stopping database service, its terminal remained open even though the service was killed
+
+### Root Causes
+
+1. **Failed Status Bug (`process.rs`)**: When `stop_service()` was called, it would set the status based on the process exit code. On Windows (and Unix when using SIGKILL), killed processes have non-zero exit codes (e.g., 130 for SIGINT, 137 for SIGKILL), causing intentionally stopped services to be marked as `Failed` instead of `Stopped`.
+
+2. **No Two-Way Terminal Sync**: The terminal manager only tracked when services were stopped to close terminals. When users manually closed a terminal, the service kept running.
+
+3. **Status Mapping**: The extension mapped "stopped" status from daemon to `ServiceStatus.Stopped`, but from a user's perspective, a stopped service should appear the same as one that was never started (`NotStarted`).
+
+### Fixes Applied
+
+#### 1. Fix stop_service to Always Set Stopped Status (`process.rs`)
+
+When `stop_service()` is called explicitly, always mark as `Stopped` regardless of exit code:
+
+```rust
+// BEFORE: Set status based on exit code (wrong for killed processes)
+match wait_result {
+    Ok(Ok(exit_status)) => {
+        if exit_status.success() {
+            process.status = ServiceStatus::Stopped;
+        } else {
+            process.status = ServiceStatus::Failed {
+                exit_code: exit_status.code().unwrap_or(-1),
+            };
+        }
+    }
+}
+
+// AFTER: Always mark as Stopped when stop_service is called
+match wait_result {
+    Ok(Ok(_exit_status)) => {
+        // Always mark as Stopped when stop_service is called explicitly,
+        // regardless of exit code. Killed processes often have non-zero
+        // exit codes which doesn't mean they "failed".
+        process.status = ServiceStatus::Stopped;
+    }
+}
+```
+
+#### 2. Two-Way Terminal Sync (`terminal-manager.ts`)
+
+Added terminal close handler that stops the service when user closes terminal:
+
+```typescript
+// New type for handling terminal closes
+export type TerminalCloseHandler = (serviceName: string) => Promise<void>;
+
+// In TerminalManager constructor:
+vscode.window.onDidCloseTerminal((terminal) => {
+    // ... find service name ...
+    
+    // Check if this was a user-initiated close (not programmatic)
+    const wasUserClose = !this.closingProgrammatically.has(serviceName);
+    
+    if (wasUserClose) {
+        // Stop the service when user closes the terminal (two-way sync)
+        if (this.terminalCloseHandler) {
+            this.terminalCloseHandler(serviceName);
+        }
+    }
+});
+
+// Track programmatic closes to avoid stopping service when WE close it
+closeTerminal(serviceName: string): void {
+    this.closingProgrammatically.add(serviceName);
+    terminal.dispose();
+}
+```
+
+#### 3. Wire Up Terminal Close Handler (`extension.ts`)
+
+```typescript
+// Set up terminal close handler for two-way sync
+terminalManager.setTerminalCloseHandler(async (serviceName: string) => {
+    if (rpcClient) {
+        await rpcClient.request('stopService', { service: serviceName });
+        
+        // Update tree view status to NotStarted
+        if (treeDataProvider) {
+            treeDataProvider.updateServiceStatus(serviceName, ServiceStatus.NotStarted);
+        }
+    }
+});
+```
+
+#### 4. Map "Stopped" to "NotStarted" (`extension.ts`)
+
+From user's perspective, stopped = not running:
+
+```typescript
+function parseServiceStatus(statusStr: string): ServiceStatus {
+    switch (normalized) {
+        case 'stopped':
+            // Map stopped to NotStarted - from user's perspective, a stopped service
+            // should appear the same as one that was never started
+            return ServiceStatus.NotStarted;
+        // ...
+    }
+}
+```
+
+#### 5. Update All Status Handlers to Use NotStarted
+
+Changed all places that set `ServiceStatus.Stopped` to use `ServiceStatus.NotStarted`:
+- `extension.ts`: `serviceStopped` notification handler
+- `commands.ts`: `stopService` finally block
+- `commands.ts`: `stopAll` service status updates
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `core/src/process.rs` | Always set `Stopped` status in `stop_service()` regardless of exit code |
+| `extension/src/terminal-manager.ts` | Added terminal close handler, programmatic close tracking |
+| `extension/src/extension.ts` | Wire up terminal close handler, map "stopped" to NotStarted |
+| `extension/src/commands.ts` | Use NotStarted instead of Stopped in stop handlers |
+
+### Summary
+
+- Services now show "NotStarted" instead of "Failed" when stopped
+- Closing a terminal manually now stops the associated service (two-way sync)
+- All terminals are properly closed when stopping services (including cascade stops)
+- Distinction: "Failed" = service crashed/errored, "NotStarted" = service not running

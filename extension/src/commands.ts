@@ -267,7 +267,8 @@ export class CommandManager {
             if (treeDataProvider) {
                 const services = treeDataProvider.getAllServices();
                 for (const service of services) {
-                    treeDataProvider.updateServiceStatus(service.name, ServiceStatus.Stopped);
+                    // Use NotStarted - from user's perspective, stopped = not running
+                    treeDataProvider.updateServiceStatus(service.name, ServiceStatus.NotStarted);
                 }
             }
 
@@ -529,10 +530,10 @@ export class CommandManager {
                 // Ignore errors closing terminal
             }
             
-            // Update tree view status to Stopped
+            // Update tree view status to NotStarted (stopped = not running from user's perspective)
             const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
             if (treeDataProvider) {
-                treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.Stopped);
+                treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.NotStarted);
             }
         }
     }
