@@ -451,3 +451,147 @@ Changed all places that set `ServiceStatus.Stopped` to use `ServiceStatus.NotSta
 - Closing a terminal manually now stops the associated service (two-way sync)
 - All terminals are properly closed when stopping services (including cascade stops)
 - Distinction: "Failed" = service crashed/errored, "NotStarted" = service not running
+
+---
+
+## Round 5: Terminal Close Delay Fix
+
+### Date: January 25, 2026
+
+### Issue Reported
+
+**Database terminal doesn't close immediately after stopping** - When stopping the database service via the UI, the terminal stays open until the RPC request times out (up to 120 seconds), showing the error "Failed to stop database: Request timeout: stopService".
+
+### Symptoms from Logs
+
+```
+[09:32:02.111Z] Service [database]: Stopping service
+[09:32:02.111Z] RPC [stopService] request - id: 24, params: {"service":"database"}
+[09:32:02.116Z] RPC [serviceStopped] notification - {"service":"backend-api"}
+[09:32:02.116Z] Terminal [backend-api]: Terminal closed programmatically
+... (no serviceStopped notification for database, no RPC response)
+[09:32:03.602Z] [Status Refresh] database: Running -> NotStarted
+```
+
+The daemon successfully stops all services (including dependents), but:
+1. The `serviceStopped` notification for the directly stopped service (`database`) is never received
+2. The RPC response for `stopService` request never arrives
+3. Eventually the RPC times out after 120 seconds
+
+### Root Cause
+
+The extension was waiting for the RPC response before closing the terminal (in the `finally` block). Since the daemon wasn't sending a response for the `stopService` request, the terminal stayed open until the 120 second timeout.
+
+The actual bug appears to be in the daemon's Windows process handling - the `stopService` request blocks indefinitely. However, the daemon IS stopping the service (as evidenced by status refresh showing "NotStarted"), just not sending the response/notification.
+
+### Fix Applied
+
+Close the terminal **immediately** when the user clicks stop, **before** waiting for the RPC response. This provides better UX - the user sees the terminal close right away, and we don't need to wait for daemon confirmation.
+
+```typescript
+// BEFORE: Terminal closed in finally block (after RPC completes/times out)
+private async stopService(item?: ServiceTreeItem): Promise<void> {
+    try {
+        await rpcClient.request('stopService', ...);  // Could hang for 120s
+    } finally {
+        this.terminalManager.closeTerminal(serviceName);  // Too late!
+    }
+}
+
+// AFTER: Terminal closed immediately when stop is requested
+private async stopService(item?: ServiceTreeItem): Promise<void> {
+    // Close terminal IMMEDIATELY - don't wait for RPC
+    this.terminalManager.closeTerminal(serviceName);
+    treeDataProvider.updateServiceStatus(serviceName, ServiceStatus.NotStarted);
+    
+    try {
+        await rpcClient.request('stopService', ...);  // Still send the request
+    } catch (err) {
+        // Even if RPC fails, terminal is already closed
+    }
+}
+```
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `extension/src/commands.ts` | Move terminal close to BEFORE RPC request in `stopService()` |
+
+### Testing
+
+1. Start database service
+2. Click stop on database
+3. Terminal should close **immediately** (not after timeout)
+4. UI should update to "NotStarted" immediately
+5. Even if RPC times out, user experience is good
+
+### Note on Daemon Bug
+
+The underlying daemon issue (not sending `serviceStopped` notification and RPC response for directly stopped services) still exists but is now masked by this extension-side fix. The daemon should be investigated separately to ensure:
+1. `serviceStopped` notification is sent for the service that was directly stopped
+2. RPC response is sent for `stopService` requests
+
+---
+
+## Round 5b: Remove Blocking Progress Notification
+
+### Date: January 25, 2026
+
+### Issue Reported
+
+**"Stopping database..." notification persists** - After the terminal closes and status shows "NotStarted", a progress notification continues showing "Stopping database..." until the RPC times out.
+
+### Root Cause
+
+The code was using `vscode.window.withProgress()` to show a blocking progress notification while waiting for the RPC response. Since the daemon doesn't respond to the `stopService` RPC, the notification stayed visible indefinitely.
+
+### Fix Applied
+
+Send the RPC request in the background (fire-and-forget) without blocking the UI:
+
+```typescript
+// BEFORE: Blocking progress notification that waits for RPC
+await vscode.window.withProgress(
+    { title: `Stopping ${serviceName}...` },
+    async () => {
+        await rpcClient.request('stopService', ...);  // Blocks UI!
+    }
+);
+
+// AFTER: Non-blocking background RPC
+rpcClient.request('stopService', { service: serviceName })
+    .then(() => {
+        // Log success in background
+    })
+    .catch((err) => {
+        // Log error in background - don't show to user
+        // From user's perspective, service is already stopped
+    });
+
+// Show immediate feedback
+vscode.window.showInformationMessage(`Service ${serviceName} stopped`);
+```
+
+### Rationale
+
+Since we've already:
+1. Closed the terminal (immediate)
+2. Updated the UI status to "NotStarted" (immediate)
+3. Shown the success message (immediate)
+
+...there's no need to wait for daemon confirmation. The RPC request tells the daemon to stop, but we don't need to block the UI waiting for a response that may never come.
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `extension/src/commands.ts` | Replace blocking `withProgress` with background RPC call |
+
+### Result
+
+- Terminal closes immediately
+- Status updates immediately  
+- Success message shows immediately
+- No lingering progress notification
+- RPC still sent to daemon (in background)

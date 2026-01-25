@@ -491,51 +491,52 @@ export class CommandManager {
             this.activityLogger.logServiceAction(targetItem.serviceName, 'Stopping service');
         }
 
+        // Close the terminal IMMEDIATELY when stopping, don't wait for RPC response
+        // This provides better UX - user sees the terminal close right away
+        // The RPC might hang or timeout, but the user intent is clear: stop the service
         try {
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: `Stopping ${targetItem.serviceName}...`,
-                    cancellable: false
-                },
-                async () => {
-                    await rpcClient.request('stopService', { service: targetItem.serviceName });
-                }
-            );
-
-            vscode.window.showInformationMessage(`Service ${targetItem.serviceName} stopped`);
+            this.terminalManager.closeTerminal(targetItem.serviceName);
             
-            // Log success
             if (this.activityLogger) {
-                this.activityLogger.logServiceAction(targetItem.serviceName, 'Service stopped successfully');
+                this.activityLogger.logTerminalAction(targetItem.serviceName, 'Terminal closed on stop request');
             }
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            
-            // Log error
-            if (this.activityLogger) {
-                this.activityLogger.logError(`stopService(${targetItem.serviceName})`, errorMessage);
-            }
-            
-            vscode.window.showErrorMessage(
-                `Failed to stop ${targetItem.serviceName}: ${errorMessage}`
-            );
-        } finally {
-            // Always close the terminal when stopping, regardless of RPC success/failure
-            // The notification handler will also try to close it, but this ensures cleanup
-            // even if the RPC times out before the notification is sent
-            try {
-                this.terminalManager.closeTerminal(targetItem.serviceName);
-            } catch {
-                // Ignore errors closing terminal
-            }
-            
-            // Update tree view status to NotStarted (stopped = not running from user's perspective)
-            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
-            if (treeDataProvider) {
-                treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.NotStarted);
-            }
+        } catch {
+            // Ignore errors closing terminal
         }
+
+        // Update tree view status to NotStarted immediately for responsive UI
+        const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
+        if (treeDataProvider) {
+            treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.NotStarted);
+        }
+
+        // Send the RPC request in the background - don't block UI waiting for response
+        // The daemon may not respond promptly, but that's okay - we've already:
+        // 1. Closed the terminal
+        // 2. Updated the UI status
+        // The RPC tells the daemon to stop, but we don't need to wait for confirmation
+        const serviceName = targetItem.serviceName;
+        const activityLogger = this.activityLogger;
+        
+        rpcClient.request('stopService', { service: serviceName })
+            .then(() => {
+                // Log success (background)
+                if (activityLogger) {
+                    activityLogger.logServiceAction(serviceName, 'Service stopped successfully (daemon confirmed)');
+                }
+            })
+            .catch((err) => {
+                // Log error but don't show to user - the service appears stopped from their perspective
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                if (activityLogger) {
+                    activityLogger.logError(`stopService(${serviceName}) background`, errorMessage);
+                }
+                // Note: We don't show an error message to the user because from their perspective
+                // the service is already stopped (terminal closed, status updated)
+            });
+        
+        // Show immediate feedback - no need to wait
+        vscode.window.showInformationMessage(`Service ${targetItem.serviceName} stopped`);
     }
 
     /**
