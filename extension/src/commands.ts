@@ -170,12 +170,19 @@ export class CommandManager {
             }
 
             // Get all services to create terminals for them
-            const treeDataProvider = this.getTreeDataProvider();
+            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
             const services = treeDataProvider ? treeDataProvider.getAllServices() : [];
 
             // Create terminals for all services BEFORE starting
             for (const service of services) {
                 this.terminalManager.getOrCreateTerminal(service.name);
+            }
+
+            // Update all services to Starting status immediately
+            if (treeDataProvider) {
+                for (const service of services) {
+                    treeDataProvider.updateServiceStatus(service.name, ServiceStatus.Starting);
+                }
             }
 
             await vscode.window.withProgress(
@@ -194,6 +201,9 @@ export class CommandManager {
                 this.terminalManager.showTerminal(service.name, true);
             }
 
+            // Refresh to synchronize with daemon's actual state
+            await this.refreshServices();
+
             vscode.window.showInformationMessage('All services started');
             
             // Log success
@@ -206,6 +216,13 @@ export class CommandManager {
             // Log error
             if (this.activityLogger) {
                 this.activityLogger.logError('startAll()', errorMessage);
+            }
+            
+            // Try to refresh to get accurate state from daemon
+            try {
+                await this.refreshServices();
+            } catch {
+                // Ignore refresh errors during error handling
             }
             
             vscode.window.showErrorMessage(
@@ -244,6 +261,19 @@ export class CommandManager {
             // Close all terminals (terminals will also be closed via notification handlers)
             this.terminalManager.closeAllTerminals();
 
+            // Update all service statuses to Stopped immediately in the tree view
+            // This ensures the UI reflects the stopped state even if notifications are delayed
+            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
+            if (treeDataProvider) {
+                const services = treeDataProvider.getAllServices();
+                for (const service of services) {
+                    treeDataProvider.updateServiceStatus(service.name, ServiceStatus.Stopped);
+                }
+            }
+
+            // Refresh to synchronize with daemon's actual state
+            await this.refreshServices();
+
             vscode.window.showInformationMessage('All services stopped');
             
             // Log success
@@ -256,6 +286,17 @@ export class CommandManager {
             // Log error
             if (this.activityLogger) {
                 this.activityLogger.logError('stopAll()', errorMessage);
+            }
+            
+            // Even on error, try to update UI to reflect what we know
+            // Close all terminals
+            this.terminalManager.closeAllTerminals();
+            
+            // Try to refresh to get accurate state from daemon
+            try {
+                await this.refreshServices();
+            } catch {
+                // Ignore refresh errors during error handling
             }
             
             vscode.window.showErrorMessage(

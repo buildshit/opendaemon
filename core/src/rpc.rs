@@ -436,14 +436,25 @@ impl RpcServer {
                 let orch = self.orchestrator.lock().await;
                 let spawned_statuses = orch.process_manager.get_all_statuses();
                 
+                // Check ready watcher state for accurate status
+                let ready_watcher = orch.ready_watcher().lock().await;
+                
                 // Build status map including ALL services from config
                 // Services not yet started will show as "not_started"
+                // If a service is in "Starting" but ready_watcher shows it's ready, report "running"
                 let status_map: HashMap<String, String> = orch.config().services.keys()
                     .map(|name| {
                         let status_str = if let Some(status) = spawned_statuses.get(name) {
                             match status {
                                 crate::process::ServiceStatus::NotStarted => "not_started".to_string(),
-                                crate::process::ServiceStatus::Starting => "starting".to_string(),
+                                crate::process::ServiceStatus::Starting => {
+                                    // Check if ready watcher says this service is ready
+                                    if ready_watcher.is_ready(name) {
+                                        "running".to_string()
+                                    } else {
+                                        "starting".to_string()
+                                    }
+                                }
                                 crate::process::ServiceStatus::Running => "running".to_string(),
                                 crate::process::ServiceStatus::Stopped => "stopped".to_string(),
                                 crate::process::ServiceStatus::Failed { exit_code } => {
@@ -456,6 +467,8 @@ impl RpcServer {
                         (name.clone(), status_str)
                     })
                     .collect();
+                
+                drop(ready_watcher); // Release the lock
                 
                 JsonRpcResponse::success(id, json!({"services": status_map}))
             }

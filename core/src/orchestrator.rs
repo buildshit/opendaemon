@@ -139,6 +139,11 @@ impl Orchestrator {
         &self.config
     }
     
+    /// Get the ready watcher (for checking service ready state)
+    pub fn ready_watcher(&self) -> &Arc<Mutex<ReadyWatcher>> {
+        &self.ready_watcher
+    }
+    
     /// Get the dependency graph
     pub fn graph(&self) -> &ServiceGraph {
         &self.graph
@@ -449,14 +454,15 @@ impl Orchestrator {
             return Err(err);
         }
         
-        // Check if service is already stopped or not running
-        if let Some(status) = self.process_manager.get_status(service_name) {
-            if matches!(status, crate::process::ServiceStatus::Stopped | crate::process::ServiceStatus::Failed { .. }) {
-                // Already stopped, nothing to do
-                return Ok(());
-            }
-        } else {
-            // Service not found in process manager, nothing to stop
+        // Check current status - only proceed if service is running/starting
+        let current_status = self.process_manager.get_status(service_name);
+        let needs_stop = matches!(
+            current_status,
+            Some(crate::process::ServiceStatus::Running) | Some(crate::process::ServiceStatus::Starting)
+        );
+        
+        // If service is already stopped/failed/not-started, return early - no duplicates
+        if !needs_stop {
             return Ok(());
         }
         
@@ -470,10 +476,15 @@ impl Orchestrator {
             }
         };
         
-        // Stop dependents first (cascade)
+        // Stop dependents first (cascade) - only those that are running/starting
         for dependent in dependents {
-            // Only stop if the service is actually running
-            if self.process_manager.get_status(&dependent).is_some() {
+            let dep_status = self.process_manager.get_status(&dependent);
+            let dep_needs_stop = matches!(
+                dep_status,
+                Some(crate::process::ServiceStatus::Running) | Some(crate::process::ServiceStatus::Starting)
+            );
+            
+            if dep_needs_stop {
                 // Use Box::pin to handle recursion
                 if let Err(e) = Box::pin(self.stop_service(&dependent)).await {
                     self.emit_error(&e);
@@ -482,7 +493,7 @@ impl Orchestrator {
             }
         }
         
-        // Now stop the target service itself
+        // Stop the target service itself
         if let Err(e) = self.process_manager.stop_service(service_name).await {
             let err = OrchestratorError::Process(e);
             self.emit_error(&err);
@@ -495,7 +506,7 @@ impl Orchestrator {
             watcher.reset_service(service_name);
         }
         
-        // Emit stopped event
+        // Emit stopped event for this service
         self.emit_event(OrchestratorEvent::ServiceStopped {
             service: service_name.to_string(),
         });
