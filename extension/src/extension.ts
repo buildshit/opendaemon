@@ -22,6 +22,10 @@ let errorDisplayManager: ErrorDisplayManager | null = null;
 let extensionContext: vscode.ExtensionContext | null = null;
 let logDocumentProvider: LogDocumentProvider | null = null;
 let activityLogger: ActivityLogger | null = null;
+let statusRefreshInterval: NodeJS.Timeout | null = null;
+
+// Interval for periodic status refresh (as a fallback to real-time notifications)
+const STATUS_REFRESH_INTERVAL_MS = 2000;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('OpenDaemon extension is now active');
@@ -105,6 +109,9 @@ export async function deactivate() {
     if (activityLogger) {
         activityLogger.log('Extension deactivated');
     }
+
+    // Stop periodic status refresh
+    stopPeriodicStatusRefresh();
 
     if (fileWatcher) {
         fileWatcher.stop();
@@ -237,6 +244,11 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         }
         
         console.log('[OpenDaemon] Initialization complete');
+        
+        // Step 8: Start periodic status refresh as a fallback
+        console.log('[OpenDaemon] Step 8: Starting periodic status refresh...');
+        startPeriodicStatusRefresh();
+        console.log('[OpenDaemon] Periodic status refresh started');
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error('[OpenDaemon] Failed to start daemon:', errorMessage);
@@ -259,6 +271,9 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
  * Handle config file changes
  */
 async function handleConfigChanged(): Promise<void> {
+    // Stop periodic status refresh
+    stopPeriodicStatusRefresh();
+    
     // Stop current daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -275,7 +290,7 @@ async function handleConfigChanged(): Promise<void> {
         treeDataProvider.clear();
     }
 
-    // Restart with new config
+    // Restart with new config (this will restart the periodic refresh)
     const configPath = fileWatcher?.getConfigPath();
     if (configPath) {
         await initializeDaemon(configPath);
@@ -286,6 +301,9 @@ async function handleConfigChanged(): Promise<void> {
  * Handle config file deletion
  */
 async function handleConfigDeleted(): Promise<void> {
+    // Stop periodic status refresh
+    stopPeriodicStatusRefresh();
+    
     // Stop daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -327,6 +345,86 @@ async function findDmnConfig(): Promise<string | null> {
         return dmnPath;
     } catch {
         return null;
+    }
+}
+
+/**
+ * Start periodic status refresh
+ * This acts as a fallback in case real-time notifications are missed
+ */
+function startPeriodicStatusRefresh(): void {
+    // Stop any existing interval first
+    stopPeriodicStatusRefresh();
+    
+    statusRefreshInterval = setInterval(async () => {
+        await refreshStatusFromDaemon();
+    }, STATUS_REFRESH_INTERVAL_MS);
+    
+    if (activityLogger) {
+        activityLogger.log(`Periodic status refresh started (interval: ${STATUS_REFRESH_INTERVAL_MS}ms)`);
+    }
+}
+
+/**
+ * Stop periodic status refresh
+ */
+function stopPeriodicStatusRefresh(): void {
+    if (statusRefreshInterval) {
+        clearInterval(statusRefreshInterval);
+        statusRefreshInterval = null;
+        
+        if (activityLogger) {
+            activityLogger.log('Periodic status refresh stopped');
+        }
+    }
+}
+
+/**
+ * Refresh service status from daemon (silent, for background polling)
+ * This is a lightweight version of loadServices that doesn't log errors prominently
+ */
+async function refreshStatusFromDaemon(): Promise<void> {
+    if (!rpcClient || !treeDataProvider) {
+        return;
+    }
+
+    try {
+        const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
+        const result = response.services;
+
+        if (!result || Object.keys(result).length === 0) {
+            return;
+        }
+
+        // Get current services from tree view to detect changes
+        const currentServices = treeDataProvider.getAllServices();
+        const currentStatusMap = new Map(currentServices.map(s => [s.name, s.status]));
+
+        // Convert status strings to ServiceStatus enum and check for changes
+        let hasChanges = false;
+        const services = Object.entries(result).map(([name, statusStr]) => {
+            const newStatus = parseServiceStatus(statusStr);
+            const currentStatus = currentStatusMap.get(name);
+            
+            if (currentStatus !== newStatus) {
+                hasChanges = true;
+                // Log status change detection from polling
+                if (activityLogger) {
+                    activityLogger.log(`[Status Refresh] ${name}: ${currentStatus} -> ${newStatus}`);
+                }
+            }
+            
+            return { name, status: newStatus };
+        });
+
+        // Only update tree view if there are changes
+        if (hasChanges) {
+            treeDataProvider.updateServices(services);
+        }
+    } catch (err) {
+        // Silently ignore errors during background polling
+        // The periodic refresh is a fallback, so we don't want to spam errors
+        console.debug('[refreshStatusFromDaemon] Error during periodic refresh:', err);
     }
 }
 
