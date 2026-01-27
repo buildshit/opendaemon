@@ -163,55 +163,65 @@ export async function activate(context: vscode.ExtensionContext) {
         async () => await handleConfigDeleted()
     );
 
+    // Get the CLI logger to output diagnostics to the visible output channel
+    const logger = getCLILogger();
+    
     // Initialize CLI integration manager
     try {
         cliManager = new CLIIntegrationManager(context);
         await cliManager.activate();
-        console.log('[OpenDaemon] CLI integration activated successfully');
+        logger.info('CLI integration activated successfully');
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error('[OpenDaemon] Failed to activate CLI integration:', errorMsg);
+        logger.error('Failed to activate CLI integration:', errorMsg);
         // Continue with extension activation even if CLI integration fails
     }
 
     // Check for dmn.json in workspace (or offer to create)
-    console.log('[OpenDaemon] Looking for dmn.json configuration...');
+    logger.info('========================================');
+    logger.info('    Daemon Initialization Start    ');
+    logger.info('========================================');
+    logger.info('Looking for dmn.json configuration...');
     let dmnConfigPath: string | null = null;
     
     try {
         dmnConfigPath = await findDmnConfig();
-        console.log(`[OpenDaemon] findDmnConfig result: ${dmnConfigPath || 'NOT FOUND'}`);
+        logger.info(`findDmnConfig result: ${dmnConfigPath || 'NOT FOUND'}`);
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error('[OpenDaemon] Error finding dmn.json:', errorMsg);
+        logger.error('Error finding dmn.json:', errorMsg);
     }
 
     if (!dmnConfigPath) {
-        console.log('[OpenDaemon] dmn.json not found, checking ConfigWizard...');
+        logger.info('dmn.json not found, checking ConfigWizard...');
         try {
             // Offer to create dmn.json
             dmnConfigPath = await ConfigWizard.detectAndOfferCreation();
-            console.log(`[OpenDaemon] ConfigWizard result: ${dmnConfigPath || 'NOT CREATED'}`);
+            logger.info(`ConfigWizard result: ${dmnConfigPath || 'NOT CREATED'}`);
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
-            console.error('[OpenDaemon] Error in ConfigWizard:', errorMsg);
+            logger.error('Error in ConfigWizard:', errorMsg);
         }
     }
 
     if (dmnConfigPath) {
-        console.log(`[OpenDaemon] Initializing daemon with config: ${dmnConfigPath}`);
+        logger.info(`Initializing daemon with config: ${dmnConfigPath}`);
         try {
             await initializeDaemon(dmnConfigPath);
-            console.log('[OpenDaemon] Daemon initialization complete');
+            logger.info('Daemon initialization complete');
+            logger.info('========================================');
+            logger.info('    Daemon Initialization COMPLETE    ');
+            logger.info('========================================');
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
-            console.error('[OpenDaemon] Error initializing daemon:', errorMsg);
+            logger.error('Error initializing daemon:', errorMsg);
             if (err instanceof Error && err.stack) {
-                console.error('[OpenDaemon] Stack trace:', err.stack);
+                logger.error('Stack trace:', err.stack);
             }
         }
     } else {
-        console.log('[OpenDaemon] No dmn.json found or created - services panel will be empty');
+        logger.warn('No dmn.json found or created - services panel will be empty');
+        logger.info('========================================');
     }
 }
 
@@ -482,12 +492,13 @@ async function handleConfigDeleted(): Promise<void> {
  * Find dmn.json in the workspace root
  */
 async function findDmnConfig(): Promise<string | null> {
+    const logger = getCLILogger();
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
-    console.log(`[OpenDaemon] findDmnConfig: workspaceFolders count = ${workspaceFolders?.length ?? 0}`);
+    logger.info(`findDmnConfig: workspaceFolders count = ${workspaceFolders?.length ?? 0}`);
     
     if (!workspaceFolders || workspaceFolders.length === 0) {
-        console.log('[OpenDaemon] findDmnConfig: No workspace folders found');
+        logger.warn('findDmnConfig: No workspace folders found');
         return null;
     }
 
@@ -495,14 +506,14 @@ async function findDmnConfig(): Promise<string | null> {
     const rootPath = workspaceFolders[0].uri.fsPath;
     const dmnPath = path.join(rootPath, 'dmn.json');
     
-    console.log(`[OpenDaemon] findDmnConfig: Checking for ${dmnPath}`);
+    logger.info(`findDmnConfig: Checking for ${dmnPath}`);
 
     try {
         await fs.promises.access(dmnPath, fs.constants.F_OK);
-        console.log(`[OpenDaemon] findDmnConfig: Found dmn.json at ${dmnPath}`);
+        logger.info(`findDmnConfig: Found dmn.json at ${dmnPath}`);
         return dmnPath;
     } catch (err) {
-        console.log(`[OpenDaemon] findDmnConfig: dmn.json not found at ${dmnPath}`);
+        logger.info(`findDmnConfig: dmn.json not found at ${dmnPath}`);
         return null;
     }
 }
