@@ -1,5 +1,10 @@
 # CLI Integration Fix - Complete History
 
+> **STATUS: RESOLVED** (2026-01-27)
+> 
+> The CLI integration now works correctly in both VS Code and Cursor IDE.
+> See `CLI.md` for the complete implementation reference.
+
 This document tracks all attempts to make the `dmn` CLI command work natively in VS Code terminals.
 
 ## Goal
