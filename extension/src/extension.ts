@@ -11,8 +11,11 @@ import { DmnFileWatcher } from './file-watcher';
 import { ErrorDisplayManager, ErrorCategory } from './error-display';
 import { LogDocumentProvider } from './log-document-provider';
 import { ActivityLogger } from './activity-logger';
+import { CLIIntegrationManager } from './cli-integration/cli-integration-manager';
+import { getCLILogger } from './cli-integration/cli-logger';
 
 let daemonManager: DaemonManager | null = null;
+let cliManager: CLIIntegrationManager | null = null;
 let rpcClient: RpcClient | null = null;
 let treeDataProvider: ServiceTreeDataProvider | null = null;
 let commandManager: CommandManager | null = null;
@@ -83,11 +86,93 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     commandManager.registerCommands();
 
+    // Register CLI integration commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.newTerminalWithCLI', async () => {
+            if (cliManager) {
+                try {
+                    const terminal = await cliManager.createTerminalWithCLI();
+                    terminal.show();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to create terminal: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.showCLIInfo', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.showCLIInfo();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to show CLI info: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.installCLIGlobally', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.showGlobalInstallInstructions();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to show installation instructions: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    // Register command to show CLI logs
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.showCLILogs', () => {
+            const logger = getCLILogger();
+            logger.show();
+        })
+    );
+
+    // Register command to run CLI diagnostics
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.runCLIDiagnostics', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.runDiagnostics();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to run diagnostics: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration is not active.');
+            }
+        })
+    );
+
     // Initialize file watcher
     fileWatcher = new DmnFileWatcher(
         async () => await handleConfigChanged(),
         async () => await handleConfigDeleted()
     );
+
+    // Initialize CLI integration manager
+    try {
+        cliManager = new CLIIntegrationManager(context);
+        await cliManager.activate();
+        console.log('[OpenDaemon] CLI integration activated successfully');
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('[OpenDaemon] Failed to activate CLI integration:', errorMsg);
+        // Continue with extension activation even if CLI integration fails
+    }
 
     // Check for dmn.json in workspace (or offer to create)
     let dmnConfigPath = await findDmnConfig();
@@ -108,6 +193,12 @@ export async function deactivate() {
     // Log deactivation before disposing
     if (activityLogger) {
         activityLogger.log('Extension deactivated');
+    }
+
+    // Deactivate CLI integration
+    if (cliManager) {
+        await cliManager.deactivate();
+        cliManager = null;
     }
 
     // Stop periodic status refresh

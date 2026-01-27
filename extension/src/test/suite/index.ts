@@ -8,10 +8,10 @@ export function run(): Promise<void> {
         color: true
     });
 
-    const testsRoot = path.resolve(__dirname, '..');
+    const testsRoot = path.resolve(__dirname);
 
     return new Promise((resolve, reject) => {
-        glob('**/**.test.js', { cwd: testsRoot }).then(files => {
+        glob('**/*.test.js', { cwd: testsRoot }).then(files => {
             files.forEach(f => mocha.addFile(path.resolve(testsRoot, f)));
 
             try {

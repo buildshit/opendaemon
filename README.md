@@ -68,13 +68,42 @@ Create a `dmn.json` file in your workspace root:
 
 #### Using the CLI
 
-```bash
-# Start the daemon (usually done automatically by the extension)
-dmn daemon
+The `dmn` command is automatically available in all VS Code terminals after installing the extension—no setup required!
 
-# Start in MCP mode for AI agent integration
-dmn mcp
+```bash
+# Check version
+dmn --version
+
+# View all commands
+dmn --help
+
+# Check service status
+dmn status
+
+# Start all services
+dmn start
+
+# Stop all services
+dmn stop
 ```
+
+**📚 Learn more:** [CLI Integration Guide](extension/docs/cli-integration.md)
+
+### Terminal CLI Integration
+
+OpenDaemon automatically makes the `dmn` command available in VS Code's integrated terminal. Simply open a new terminal and start using `dmn` commands immediately:
+
+- **Zero Configuration**: Works right after extension installation
+- **Automatic PATH Injection**: Available in all new VS Code terminals
+- **Cross-Platform**: Works on Windows, macOS, and Linux
+- **Optional Global Install**: Can be installed system-wide for use outside VS Code
+
+**Quick Start:**
+1. Open a new terminal in VS Code (Terminal → New Terminal)
+2. Type `dmn --version` to verify it's working
+3. Use any `dmn` command to manage your services
+
+For detailed information about available commands, global installation, and troubleshooting, see the [CLI Integration Guide](extension/docs/cli-integration.md).
 
 ## Configuration Reference
 
