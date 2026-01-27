@@ -175,15 +175,43 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     // Check for dmn.json in workspace (or offer to create)
-    let dmnConfigPath = await findDmnConfig();
+    console.log('[OpenDaemon] Looking for dmn.json configuration...');
+    let dmnConfigPath: string | null = null;
+    
+    try {
+        dmnConfigPath = await findDmnConfig();
+        console.log(`[OpenDaemon] findDmnConfig result: ${dmnConfigPath || 'NOT FOUND'}`);
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('[OpenDaemon] Error finding dmn.json:', errorMsg);
+    }
 
     if (!dmnConfigPath) {
-        // Offer to create dmn.json
-        dmnConfigPath = await ConfigWizard.detectAndOfferCreation();
+        console.log('[OpenDaemon] dmn.json not found, checking ConfigWizard...');
+        try {
+            // Offer to create dmn.json
+            dmnConfigPath = await ConfigWizard.detectAndOfferCreation();
+            console.log(`[OpenDaemon] ConfigWizard result: ${dmnConfigPath || 'NOT CREATED'}`);
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.error('[OpenDaemon] Error in ConfigWizard:', errorMsg);
+        }
     }
 
     if (dmnConfigPath) {
-        await initializeDaemon(dmnConfigPath);
+        console.log(`[OpenDaemon] Initializing daemon with config: ${dmnConfigPath}`);
+        try {
+            await initializeDaemon(dmnConfigPath);
+            console.log('[OpenDaemon] Daemon initialization complete');
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.error('[OpenDaemon] Error initializing daemon:', errorMsg);
+            if (err instanceof Error && err.stack) {
+                console.error('[OpenDaemon] Stack trace:', err.stack);
+            }
+        }
+    } else {
+        console.log('[OpenDaemon] No dmn.json found or created - services panel will be empty');
     }
 }
 
@@ -456,18 +484,25 @@ async function handleConfigDeleted(): Promise<void> {
 async function findDmnConfig(): Promise<string | null> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
+    console.log(`[OpenDaemon] findDmnConfig: workspaceFolders count = ${workspaceFolders?.length ?? 0}`);
+    
     if (!workspaceFolders || workspaceFolders.length === 0) {
+        console.log('[OpenDaemon] findDmnConfig: No workspace folders found');
         return null;
     }
 
     // Check first workspace folder for dmn.json
     const rootPath = workspaceFolders[0].uri.fsPath;
     const dmnPath = path.join(rootPath, 'dmn.json');
+    
+    console.log(`[OpenDaemon] findDmnConfig: Checking for ${dmnPath}`);
 
     try {
         await fs.promises.access(dmnPath, fs.constants.F_OK);
+        console.log(`[OpenDaemon] findDmnConfig: Found dmn.json at ${dmnPath}`);
         return dmnPath;
-    } catch {
+    } catch (err) {
+        console.log(`[OpenDaemon] findDmnConfig: dmn.json not found at ${dmnPath}`);
         return null;
     }
 }
