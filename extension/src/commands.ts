@@ -241,69 +241,38 @@ export class CommandManager {
             return;
         }
 
-        try {
-            // Log the action
-            if (this.activityLogger) {
-                this.activityLogger.logServiceAction('all', 'Stopping all services');
-            }
-
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'Stopping all services...',
-                    cancellable: false
-                },
-                async () => {
-                    await rpcClient.request('stopAll');
-                }
-            );
-
-            // Close all terminals (terminals will also be closed via notification handlers)
-            this.terminalManager.closeAllTerminals();
-
-            // Update all service statuses to Stopped immediately in the tree view
-            // This ensures the UI reflects the stopped state even if notifications are delayed
-            const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
-            if (treeDataProvider) {
-                const services = treeDataProvider.getAllServices();
-                for (const service of services) {
-                    // Use NotStarted - from user's perspective, stopped = not running
-                    treeDataProvider.updateServiceStatus(service.name, ServiceStatus.NotStarted);
-                }
-            }
-
-            // Refresh to synchronize with daemon's actual state
-            await this.refreshServices();
-
-            vscode.window.showInformationMessage('All services stopped');
-            
-            // Log success
-            if (this.activityLogger) {
-                this.activityLogger.logServiceAction('all', 'All services stopped successfully');
-            }
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            
-            // Log error
-            if (this.activityLogger) {
-                this.activityLogger.logError('stopAll()', errorMessage);
-            }
-            
-            // Even on error, try to update UI to reflect what we know
-            // Close all terminals
-            this.terminalManager.closeAllTerminals();
-            
-            // Try to refresh to get accurate state from daemon
-            try {
-                await this.refreshServices();
-            } catch {
-                // Ignore refresh errors during error handling
-            }
-            
-            vscode.window.showErrorMessage(
-                `Failed to stop services: ${errorMessage}`
-            );
+        // Log the action
+        if (this.activityLogger) {
+            this.activityLogger.logServiceAction('all', 'Stopping all services');
         }
+
+        // Close all terminals immediately so user intent is reflected instantly.
+        this.terminalManager.closeAllTerminals();
+
+        // Update all service statuses to NotStarted immediately in the tree view.
+        const treeDataProvider = this.getTreeDataProvider() as ServiceTreeDataProvider | null;
+        if (treeDataProvider) {
+            const services = treeDataProvider.getAllServices();
+            for (const service of services) {
+                treeDataProvider.updateServiceStatus(service.name, ServiceStatus.NotStarted);
+            }
+        }
+
+        // Match individual stop UX: fire background stopService requests per service.
+        // This avoids relying on a potentially blocking stopAll RPC path.
+        const serviceNames = treeDataProvider
+            ? treeDataProvider.getAllServices().map(s => s.name)
+            : [];
+
+        if (serviceNames.length > 0) {
+            serviceNames.forEach(serviceName => {
+                this.requestStopServiceInBackground(rpcClient, serviceName);
+            });
+        } else if (this.activityLogger) {
+            this.activityLogger.log('stopAll(): no services found to stop');
+        }
+
+        vscode.window.showInformationMessage('All services stop requested');
     }
 
     /**
@@ -510,33 +479,33 @@ export class CommandManager {
             treeDataProvider.updateServiceStatus(targetItem.serviceName, ServiceStatus.NotStarted);
         }
 
-        // Send the RPC request in the background - don't block UI waiting for response
-        // The daemon may not respond promptly, but that's okay - we've already:
-        // 1. Closed the terminal
-        // 2. Updated the UI status
-        // The RPC tells the daemon to stop, but we don't need to wait for confirmation
-        const serviceName = targetItem.serviceName;
-        const activityLogger = this.activityLogger;
+        // Send background stop request with the same non-blocking behavior used by stopAll.
+        this.requestStopServiceInBackground(rpcClient, targetItem.serviceName);
         
+        // Show immediate feedback - no need to wait
+        vscode.window.showInformationMessage(`Service ${targetItem.serviceName} stopped`);
+    }
+
+    /**
+     * Send a stopService RPC in the background without surfacing timeout errors to users.
+     * This preserves responsive UX while still requesting daemon-side shutdown.
+     */
+    private requestStopServiceInBackground(rpcClient: RpcClient, serviceName: string): void {
+        const activityLogger = this.activityLogger;
+
         rpcClient.request('stopService', { service: serviceName })
             .then(() => {
-                // Log success (background)
                 if (activityLogger) {
                     activityLogger.logServiceAction(serviceName, 'Service stopped successfully (daemon confirmed)');
                 }
             })
             .catch((err) => {
-                // Log error but don't show to user - the service appears stopped from their perspective
                 const errorMessage = err instanceof Error ? err.message : String(err);
                 if (activityLogger) {
                     activityLogger.logError(`stopService(${serviceName}) background`, errorMessage);
                 }
-                // Note: We don't show an error message to the user because from their perspective
-                // the service is already stopped (terminal closed, status updated)
+                // Intentionally no user-facing error. The user already got immediate local feedback.
             });
-        
-        // Show immediate feedback - no need to wait
-        vscode.window.showInformationMessage(`Service ${targetItem.serviceName} stopped`);
     }
 
     /**

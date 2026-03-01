@@ -1,7 +1,7 @@
 use crate::config::DmnConfig;
 use crate::graph::{GraphError, ServiceGraph};
 use crate::logs::{LogBuffer, LogLine};
-use crate::process::{LogLineEvent, ProcessError, ProcessManager};
+use crate::process::{LogLineEvent, ProcessError, ProcessExitEvent, ProcessManager};
 use crate::ready::ReadyWatcher;
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,36 +60,39 @@ impl Orchestrator {
     pub fn new(config: DmnConfig) -> Result<Self, OrchestratorError> {
         // Build the dependency graph from config
         let graph = ServiceGraph::from_config(&config)?;
-        
+
         // Create log buffer
         let log_buffer = Arc::new(Mutex::new(LogBuffer::new(1000)));
-        
+
         // Create broadcast event channel for orchestrator events
         // Capacity of 1000 should be enough for most use cases
         let (event_tx, _) = broadcast::channel(1000);
-        
+
         // Create log event channel for real-time log forwarding
         let (log_event_tx, mut log_event_rx) = mpsc::unbounded_channel::<LogLineEvent>();
-        
+
         // Create process manager with log event sender
-        let process_manager = ProcessManager::with_log_events(Arc::clone(&log_buffer), log_event_tx);
-        
+        let process_manager =
+            ProcessManager::with_log_events(Arc::clone(&log_buffer), log_event_tx);
+
         // Create ready watcher with default timeout of 60 seconds
         let ready_watcher = Arc::new(Mutex::new(ReadyWatcher::new(Duration::from_secs(60))));
-        
+
         // Spawn task to forward log events to the main event channel
         let event_tx_for_logs = event_tx.clone();
-        tokio::spawn(async move {
-            while let Some(log_event) = log_event_rx.recv().await {
-                let orch_event = OrchestratorEvent::LogLine {
-                    service: log_event.service,
-                    line: log_event.line,
-                };
-                // Ignore send errors - no receivers may be subscribed yet
-                let _ = event_tx_for_logs.send(orch_event);
-            }
-        });
-        
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                while let Some(log_event) = log_event_rx.recv().await {
+                    let orch_event = OrchestratorEvent::LogLine {
+                        service: log_event.service,
+                        line: log_event.line,
+                    };
+                    // Ignore send errors - no receivers may be subscribed yet
+                    let _ = event_tx_for_logs.send(orch_event);
+                }
+            });
+        }
+
         Ok(Self {
             config,
             graph,
@@ -99,25 +102,25 @@ impl Orchestrator {
             event_tx,
         })
     }
-    
+
     /// Subscribe to orchestrator events
     /// Returns a receiver that will receive all events emitted by the orchestrator
     /// Multiple subscribers can receive events simultaneously (broadcast)
     pub fn subscribe_events(&self) -> broadcast::Receiver<OrchestratorEvent> {
         self.event_tx.subscribe()
     }
-    
+
     /// Get a sender for emitting events from outside the orchestrator
     pub fn event_sender(&self) -> broadcast::Sender<OrchestratorEvent> {
         self.event_tx.clone()
     }
-    
+
     /// Emit an event to all subscribers
     fn emit_event(&self, event: OrchestratorEvent) {
         // Ignore send errors - if no one is listening, that's okay
         let _ = self.event_tx.send(event);
     }
-    
+
     /// Emit an error event with proper categorization
     fn emit_error(&self, error: &OrchestratorError) {
         let category = match error {
@@ -127,34 +130,68 @@ impl Orchestrator {
             OrchestratorError::ServiceNotFound(_) => "SERVICE",
             OrchestratorError::ReadyError(_) => "READY",
         };
-        
+
         self.emit_event(OrchestratorEvent::Error {
             message: error.to_string(),
             category: category.to_string(),
         });
     }
-    
+
     /// Get the configuration
     pub fn config(&self) -> &DmnConfig {
         &self.config
     }
-    
+
     /// Get the ready watcher (for checking service ready state)
     pub fn ready_watcher(&self) -> &Arc<Mutex<ReadyWatcher>> {
         &self.ready_watcher
     }
-    
+
     /// Get the dependency graph
     pub fn graph(&self) -> &ServiceGraph {
         &self.graph
     }
-    
+
     /// Check if a service is ready
     pub async fn is_service_ready(&self, service_name: &str) -> bool {
         let watcher = self.ready_watcher.lock().await;
         watcher.is_ready(service_name)
     }
-    
+
+    /// Reconcile naturally exited processes and emit matching orchestrator events.
+    pub async fn reconcile_exited_processes(&mut self) {
+        let exit_events: Vec<ProcessExitEvent> = self.process_manager.poll_exited_processes();
+        if exit_events.is_empty() {
+            return;
+        }
+
+        for exit in exit_events {
+            let service_name = exit.service.clone();
+            {
+                let mut watcher = self.ready_watcher.lock().await;
+                watcher.reset_service(&service_name);
+            }
+
+            match exit.status {
+                crate::process::ServiceStatus::Stopped => {
+                    self.emit_event(OrchestratorEvent::ServiceStopped {
+                        service: service_name,
+                    });
+                }
+                crate::process::ServiceStatus::Failed { exit_code } => {
+                    self.emit_event(OrchestratorEvent::ServiceFailed {
+                        service: service_name,
+                        error: format!(
+                            "Service exited unexpectedly (exit code {}): {}",
+                            exit_code, exit.reason
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Start all services in dependency order
     /// Services are started according to their dependencies, with each service
     /// waiting for its dependencies to be ready before starting
@@ -168,7 +205,7 @@ impl Orchestrator {
                 return Err(err);
             }
         };
-        
+
         // Start each service in order
         for service_name in start_order {
             if let Err(e) = self.start_service_with_deps(&service_name).await {
@@ -176,34 +213,43 @@ impl Orchestrator {
                 return Err(e);
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Start a service along with its dependencies
     /// This method ensures all dependencies are started before starting the service
     /// Dependencies are auto-started recursively if they're not already running
-    /// 
+    ///
     /// NOTE: This method returns immediately after spawning the service.
     /// The ready check happens asynchronously and emits serviceReady/serviceFailed notifications.
-    pub async fn start_service_with_deps(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
+    pub async fn start_service_with_deps(
+        &mut self,
+        service_name: &str,
+    ) -> Result<(), OrchestratorError> {
         // Check if service exists in config
-        let service_config = self.config.services.get(service_name)
+        let service_config = self
+            .config
+            .services
+            .get(service_name)
             .ok_or_else(|| {
                 let err = OrchestratorError::ServiceNotFound(service_name.to_string());
                 self.emit_error(&err);
                 err
             })?
             .clone();
-        
+
         // Check if service is already running or starting
         if let Some(status) = self.process_manager.get_status(service_name) {
-            if matches!(status, crate::process::ServiceStatus::Running | crate::process::ServiceStatus::Starting) {
+            if matches!(
+                status,
+                crate::process::ServiceStatus::Running | crate::process::ServiceStatus::Starting
+            ) {
                 // Already running or starting, nothing to do
                 return Ok(());
             }
         }
-        
+
         // Get dependencies for this service
         let dependencies = match self.graph.get_dependencies(service_name) {
             Ok(deps) => deps,
@@ -213,15 +259,15 @@ impl Orchestrator {
                 return Err(err);
             }
         };
-        
+
         // Start all dependencies first (recursive - they will start their own dependencies)
         for dep in &dependencies {
             let needs_start = match self.process_manager.get_status(dep) {
-                Some(crate::process::ServiceStatus::Running) |
-                Some(crate::process::ServiceStatus::Starting) => false,
+                Some(crate::process::ServiceStatus::Running)
+                | Some(crate::process::ServiceStatus::Starting) => false,
                 _ => true,
             };
-            
+
             if needs_start {
                 // Dependency is not running - start it first (recursively)
                 // This will also start its dependencies
@@ -229,7 +275,7 @@ impl Orchestrator {
                     self.emit_error(&e);
                     return Err(e);
                 }
-                
+
                 // Wait for dependency to be ready before continuing
                 // This ensures proper startup order
                 if let Err(e) = self.wait_for_ready(dep).await {
@@ -242,7 +288,7 @@ impl Orchestrator {
                     let watcher = self.ready_watcher.lock().await;
                     watcher.is_ready(dep)
                 };
-                
+
                 if !is_ready {
                     if let Err(e) = self.wait_for_ready(dep).await {
                         self.emit_error(&e);
@@ -251,28 +297,33 @@ impl Orchestrator {
                 }
             }
         }
-        
+
         // Now all dependencies should be running and ready
         // Emit starting event for this service
         self.emit_event(OrchestratorEvent::ServiceStarting {
             service: service_name.to_string(),
         });
-        
+
         // Spawn the service process
-        if let Err(e) = self.process_manager.spawn_service(service_name, &service_config).await {
+        if let Err(e) = self
+            .process_manager
+            .spawn_service(service_name, &service_config)
+            .await
+        {
             let err = OrchestratorError::Process(e);
             self.emit_error(&err);
             return Err(err);
         }
-        
+
         // Update status to Starting
-        self.process_manager.update_status(service_name, crate::process::ServiceStatus::Starting);
-        
+        self.process_manager
+            .update_status(service_name, crate::process::ServiceStatus::Starting);
+
         // Set up ready watching asynchronously based on configuration
         if let Some(ready_condition) = &service_config.ready_when {
             // Create a channel to receive log lines for this service
             let (log_tx, log_rx) = mpsc::channel(100);
-            
+
             // Spawn a task to forward logs to the ready watcher
             let log_buffer = Arc::clone(&self.log_buffer);
             let service_name_for_logs = service_name.to_string();
@@ -280,38 +331,46 @@ impl Orchestrator {
                 // Poll for new log lines and forward them
                 let mut last_count = 0;
                 loop {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    let buffer = log_buffer.lock().await;
-                    let lines = buffer.get_all_lines(&service_name_for_logs);
-                    let current_count = lines.len();
-                    
-                    // Only send new lines
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let (new_lines, current_count) = {
+                        let buffer = log_buffer.lock().await;
+                        let current_count = buffer.line_count(&service_name_for_logs);
+
+                        if current_count > last_count {
+                            let new_count = current_count - last_count;
+                            (
+                                buffer.get_lines(
+                                    &service_name_for_logs,
+                                    crate::logs::LogLineCount::Last(new_count),
+                                ),
+                                current_count,
+                            )
+                        } else {
+                            (Vec::new(), current_count)
+                        }
+                    };
+
                     if current_count > last_count {
-                        let new_lines: Vec<_> = lines.iter().skip(last_count).cloned().collect();
-                        drop(buffer); // Release lock before sending
-                        
                         for line in new_lines {
                             if log_tx.send(line).await.is_err() {
                                 return; // Channel closed, stop polling
                             }
                         }
                         last_count = current_count;
-                    } else {
-                        drop(buffer);
                     }
                 }
             });
-            
+
             // Extract custom timeout from ready condition if specified
             let custom_timeout = match ready_condition {
-                crate::config::ReadyCondition::LogContains { timeout_seconds, .. } => {
-                    timeout_seconds.map(Duration::from_secs)
-                }
-                crate::config::ReadyCondition::UrlResponds { timeout_seconds, .. } => {
-                    timeout_seconds.map(Duration::from_secs)
-                }
+                crate::config::ReadyCondition::LogContains {
+                    timeout_seconds, ..
+                } => timeout_seconds.map(Duration::from_secs),
+                crate::config::ReadyCondition::UrlResponds {
+                    timeout_seconds, ..
+                } => timeout_seconds.map(Duration::from_secs),
             };
-            
+
             // Spawn async task to watch for readiness and emit events
             // This allows the RPC call to return immediately
             // IMPORTANT: We DON'T hold the ready_watcher mutex during the watch!
@@ -325,22 +384,25 @@ impl Orchestrator {
                 watcher.get_timeout()
             };
             let timeout_duration = custom_timeout.unwrap_or(default_timeout);
-            
+
             // Spawn the ready watching task - this does NOT hold the mutex during watch
             tokio::spawn(async move {
                 // Register the condition briefly
                 {
                     let mut watcher = ready_watcher.lock().await;
-                    watcher.register_condition(&service_name_for_ready, ready_condition_clone.clone());
+                    watcher
+                        .register_condition(&service_name_for_ready, ready_condition_clone.clone());
                 }
-                
+
                 // Now watch WITHOUT holding the mutex
                 let result = Self::watch_condition_standalone(
+                    service_name_for_ready.clone(),
                     ready_condition_clone,
                     log_rx,
                     timeout_duration,
-                ).await;
-                
+                )
+                .await;
+
                 match result {
                     Ok(_) => {
                         // Mark as ready (brief lock)
@@ -353,7 +415,10 @@ impl Orchestrator {
                             service: service_name_for_ready.clone(),
                         });
                         if send_result.is_err() {
-                            eprintln!("Warning: Failed to send ServiceReady event for {} - no receivers", service_name_for_ready);
+                            eprintln!(
+                                "Warning: Failed to send ServiceReady event for {} - no receivers",
+                                service_name_for_ready
+                            );
                         }
                     }
                     Err(e) => {
@@ -363,7 +428,10 @@ impl Orchestrator {
                             error: e.to_string(),
                         });
                         if send_result.is_err() {
-                            eprintln!("Warning: Failed to send ServiceFailed event for {} - no receivers", service_name_for_ready);
+                            eprintln!(
+                                "Warning: Failed to send ServiceFailed event for {} - no receivers",
+                                service_name_for_ready
+                            );
                         }
                     }
                 }
@@ -374,41 +442,43 @@ impl Orchestrator {
                 let mut watcher = self.ready_watcher.lock().await;
                 watcher.mark_ready(service_name);
             }
-            self.process_manager.update_status(service_name, crate::process::ServiceStatus::Running);
-            
+            self.process_manager
+                .update_status(service_name, crate::process::ServiceStatus::Running);
+
             // Emit ready event
             self.emit_event(OrchestratorEvent::ServiceReady {
                 service: service_name.to_string(),
             });
         }
-        
+
         Ok(())
     }
-    
+
     /// Wait for a service to become ready
     async fn wait_for_ready(&self, service_name: &str) -> Result<(), OrchestratorError> {
         // Poll until the service is ready or timeout
         let timeout_duration = Duration::from_secs(60);
         let start = std::time::Instant::now();
-        
+
         while start.elapsed() < timeout_duration {
             let is_ready = {
                 let watcher = self.ready_watcher.lock().await;
                 watcher.is_ready(service_name)
             };
-            
+
             if is_ready {
                 return Ok(());
             }
-            
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
-        Err(OrchestratorError::ReadyError(
-            format!("Timeout waiting for service '{}' to be ready", service_name)
-        ))
+
+        Err(OrchestratorError::ReadyError(format!(
+            "Timeout waiting for service '{}' to be ready",
+            service_name
+        )))
     }
-    
+
     /// Stop all services in reverse dependency order
     /// Services are stopped in reverse order to ensure dependents are stopped before dependencies
     pub async fn stop_all(&mut self) -> Result<(), OrchestratorError> {
@@ -422,7 +492,7 @@ impl Orchestrator {
             }
         };
         let stop_order: Vec<_> = start_order.into_iter().rev().collect();
-        
+
         // Stop each service in reverse order
         for service_name in stop_order {
             // Only stop if the service is actually running
@@ -433,10 +503,10 @@ impl Orchestrator {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Stop a service and all services that depend on it
     /// This implements cascade stopping - dependents are stopped first
     pub async fn stop_service(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
@@ -446,19 +516,20 @@ impl Orchestrator {
             self.emit_error(&err);
             return Err(err);
         }
-        
+
         // Check current status - only proceed if service is running/starting
         let current_status = self.process_manager.get_status(service_name);
         let needs_stop = matches!(
             current_status,
-            Some(crate::process::ServiceStatus::Running) | Some(crate::process::ServiceStatus::Starting)
+            Some(crate::process::ServiceStatus::Running)
+                | Some(crate::process::ServiceStatus::Starting)
         );
-        
+
         // If service is already stopped/failed/not-started, return early - no duplicates
         if !needs_stop {
             return Ok(());
         }
-        
+
         // Get list of dependent services (services that depend on this one)
         let dependents = match self.graph.get_dependents(service_name) {
             Ok(deps) => deps,
@@ -468,15 +539,16 @@ impl Orchestrator {
                 return Err(err);
             }
         };
-        
+
         // Stop dependents first (cascade) - only those that are running/starting
         for dependent in dependents {
             let dep_status = self.process_manager.get_status(&dependent);
             let dep_needs_stop = matches!(
                 dep_status,
-                Some(crate::process::ServiceStatus::Running) | Some(crate::process::ServiceStatus::Starting)
+                Some(crate::process::ServiceStatus::Running)
+                    | Some(crate::process::ServiceStatus::Starting)
             );
-            
+
             if dep_needs_stop {
                 // Use Box::pin to handle recursion
                 if let Err(e) = Box::pin(self.stop_service(&dependent)).await {
@@ -485,28 +557,28 @@ impl Orchestrator {
                 }
             }
         }
-        
+
         // Stop the target service itself
         if let Err(e) = self.process_manager.stop_service(service_name).await {
             let err = OrchestratorError::Process(e);
             self.emit_error(&err);
             return Err(err);
         }
-        
+
         // Reset ready status
         {
             let mut watcher = self.ready_watcher.lock().await;
             watcher.reset_service(service_name);
         }
-        
+
         // Emit stopped event for this service
         self.emit_event(OrchestratorEvent::ServiceStopped {
             service: service_name.to_string(),
         });
-        
+
         Ok(())
     }
-    
+
     /// Restart a service by stopping it and then starting it again
     /// This will also restart any services that depend on it
     pub async fn restart_service(&mut self, service_name: &str) -> Result<(), OrchestratorError> {
@@ -516,28 +588,29 @@ impl Orchestrator {
             self.emit_error(&err);
             return Err(err);
         }
-        
+
         // Stop the service (and its dependents)
         if let Err(e) = self.stop_service(service_name).await {
             self.emit_error(&e);
             return Err(e);
         }
-        
+
         // Wait a moment for cleanup
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         // Start the service again
         if let Err(e) = self.start_service_with_deps(service_name).await {
             self.emit_error(&e);
             return Err(e);
         }
-        
+
         Ok(())
     }
-    
+
     /// Watch a ready condition standalone without holding any locks
     /// This allows other operations (like getStatus) to proceed while watching
     async fn watch_condition_standalone(
+        service_name: String,
         condition: crate::config::ReadyCondition,
         log_rx: mpsc::Receiver<crate::logs::LogLine>,
         timeout_duration: Duration,
@@ -546,13 +619,13 @@ impl Orchestrator {
         use crate::ready::ReadyError;
         use regex::Regex;
         use tokio::time::timeout;
-        
+
         match condition {
             ReadyCondition::LogContains { pattern, .. } => {
                 let regex = Regex::new(&pattern)?;
                 let mut log_rx = log_rx;
                 let mut collected_logs: Vec<String> = Vec::new();
-                
+
                 let result = timeout(timeout_duration, async {
                     while let Some(line) = log_rx.recv().await {
                         // Keep last 10 log lines for error reporting
@@ -560,13 +633,13 @@ impl Orchestrator {
                         if collected_logs.len() > 10 {
                             collected_logs.remove(0);
                         }
-                        
+
                         if regex.is_match(&line.content) {
                             return Ok(());
                         }
                     }
                     Err(ReadyError::Timeout {
-                        service: "unknown".to_string(),
+                        service: service_name.clone(),
                         timeout_secs: timeout_duration.as_secs(),
                         condition: format!("log_contains pattern: '{}'", pattern),
                         details: if !collected_logs.is_empty() {
@@ -591,7 +664,7 @@ impl Orchestrator {
                     Err(_) => {
                         // Timeout occurred
                         Err(ReadyError::Timeout {
-                            service: "unknown".to_string(),
+                            service: service_name.clone(),
                             timeout_secs: timeout_duration.as_secs(),
                             condition: format!("log_contains pattern: '{}'", pattern),
                             details: if !collected_logs.is_empty() {
@@ -624,7 +697,11 @@ impl Orchestrator {
                                 return Ok(());
                             }
                             Ok(response) => {
-                                last_error = Some(format!("HTTP {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown")));
+                                last_error = Some(format!(
+                                    "HTTP {} {}",
+                                    response.status().as_u16(),
+                                    response.status().canonical_reason().unwrap_or("Unknown")
+                                ));
                             }
                             Err(e) => {
                                 last_error = Some(format!("{}", e));
@@ -645,9 +722,9 @@ impl Orchestrator {
                         } else {
                             format!("Made {} attempts to connect.\n", attempt_count)
                         };
-                        
+
                         Err(ReadyError::Timeout {
-                            service: "unknown".to_string(),
+                            service: service_name.clone(),
                             timeout_secs: timeout_duration.as_secs(),
                             condition: format!("url_responds: '{}'", url),
                             details,
@@ -659,7 +736,6 @@ impl Orchestrator {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -699,7 +775,7 @@ mod tests {
     fn test_orchestrator_new() {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config);
-        
+
         assert!(orchestrator.is_ok());
         let orch = orchestrator.unwrap();
         assert_eq!(orch.config.services.len(), 2);
@@ -741,7 +817,7 @@ mod tests {
     fn test_orchestrator_config_access() {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config).unwrap();
-        
+
         let config_ref = orchestrator.config();
         assert_eq!(config_ref.version, "1.0");
         assert_eq!(config_ref.services.len(), 2);
@@ -751,11 +827,11 @@ mod tests {
     fn test_orchestrator_graph_access() {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config).unwrap();
-        
+
         let graph = orchestrator.graph();
         let start_order = graph.get_start_order().unwrap();
         assert_eq!(start_order.len(), 2);
-        
+
         // Database should come before backend
         let db_pos = start_order.iter().position(|s| s == "database").unwrap();
         let backend_pos = start_order.iter().position(|s| s == "backend").unwrap();
@@ -766,28 +842,17 @@ mod tests {
     fn test_orchestrator_event_channel() {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config).unwrap();
-        
-        // Test that we can get a sender for emitting events
+
+        // Subscribe first so the broadcast channel has an active receiver.
+        let event_receiver = orchestrator.subscribe_events();
         let event_sender = orchestrator.event_sender();
-        
-        // Test that we can send events
-        let test_event = OrchestratorEvent::ServiceStarting {
+
+        let test_event = OrchestratorEvent::ServiceReady {
             service: "test".to_string(),
         };
-        
         assert!(event_sender.send(test_event).is_ok());
-        
-        // Test that we can subscribe to receive events
-        let mut event_receiver = orchestrator.subscribe_events();
-        
-        // Send another event
-        let test_event2 = OrchestratorEvent::ServiceReady {
-            service: "test".to_string(),
-        };
-        event_sender.send(test_event2).unwrap();
-        
-        // Verify we can receive events (non-blocking check - may or may not have event yet)
-        // Just verify the channel is working
+
+        // Verify channel stays usable with an active receiver.
         drop(event_receiver);
     }
 
@@ -795,12 +860,12 @@ mod tests {
     fn test_emit_event() {
         let config = create_test_config();
         let orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Emit an event
         orchestrator.emit_event(OrchestratorEvent::ServiceStarting {
             service: "database".to_string(),
         });
-        
+
         // Event should be sent (we can't easily verify receipt without async, but at least it doesn't panic)
     }
 
@@ -810,7 +875,12 @@ mod tests {
         services.insert(
             "simple".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -824,12 +894,12 @@ mod tests {
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
         let result = orchestrator.start_service_with_deps("simple").await;
-        
+
         assert!(result.is_ok());
-        
+
         // Give it a moment to process
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Check that service is marked as ready
         let is_ready = {
             let watcher = orchestrator.ready_watcher.lock().await;
@@ -844,7 +914,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo db" } else { "echo db" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo db"
+                } else {
+                    "echo db"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -853,7 +928,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo backend" } else { "echo backend" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo backend"
+                } else {
+                    "echo backend"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -866,17 +946,20 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start database first
-        orchestrator.start_service_with_deps("database").await.unwrap();
+        orchestrator
+            .start_service_with_deps("database")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Now start backend (which depends on database)
         let result = orchestrator.start_service_with_deps("backend").await;
         assert!(result.is_ok());
-        
+
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Both should be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(watcher.is_ready("database"));
@@ -889,7 +972,12 @@ mod tests {
         services.insert(
             "service1".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo s1" } else { "echo s1" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo s1"
+                } else {
+                    "echo s1"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -898,7 +986,12 @@ mod tests {
         services.insert(
             "service2".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo s2" } else { "echo s2" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo s2"
+                } else {
+                    "echo s2"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -912,11 +1005,11 @@ mod tests {
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
         let result = orchestrator.start_all().await;
-        
+
         assert!(result.is_ok());
-        
+
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         // Both services should be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(watcher.is_ready("service1"));
@@ -929,7 +1022,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo db" } else { "echo db" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo db"
+                } else {
+                    "echo db"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -938,7 +1036,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo backend" } else { "echo backend" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo backend"
+                } else {
+                    "echo backend"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -947,7 +1050,12 @@ mod tests {
         services.insert(
             "frontend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo frontend" } else { "echo frontend" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo frontend"
+                } else {
+                    "echo frontend"
+                }
+                .to_string(),
                 depends_on: vec!["backend".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -961,11 +1069,11 @@ mod tests {
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
         let result = orchestrator.start_all().await;
-        
+
         assert!(result.is_ok());
-        
+
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         // All services should be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(watcher.is_ready("database"));
@@ -977,10 +1085,13 @@ mod tests {
     async fn test_start_service_nonexistent() {
         let config = create_test_config();
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         let result = orchestrator.start_service_with_deps("nonexistent").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OrchestratorError::ServiceNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OrchestratorError::ServiceNotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -989,7 +1100,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1002,10 +1118,13 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start the service
-        orchestrator.start_service_with_deps("test_service").await.unwrap();
-        
+        orchestrator
+            .start_service_with_deps("test_service")
+            .await
+            .unwrap();
+
         // Events should have been emitted (we can't easily verify without more complex setup)
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -1016,7 +1135,12 @@ mod tests {
         services.insert(
             "simple".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1029,15 +1153,18 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start the service
-        orchestrator.start_service_with_deps("simple").await.unwrap();
+        orchestrator
+            .start_service_with_deps("simple")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Stop the service
         let result = orchestrator.stop_service("simple").await;
         assert!(result.is_ok());
-        
+
         // Service should no longer be ready
         let is_ready = {
             let watcher = orchestrator.ready_watcher.lock().await;
@@ -1052,7 +1179,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1061,7 +1193,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1074,15 +1211,15 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start both services
         orchestrator.start_all().await.unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         // Stop database (should also stop backend)
         let result = orchestrator.stop_service("database").await;
         assert!(result.is_ok());
-        
+
         // Both services should no longer be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(!watcher.is_ready("database"));
@@ -1095,7 +1232,12 @@ mod tests {
         services.insert(
             "service1".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1104,7 +1246,12 @@ mod tests {
         services.insert(
             "service2".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1117,15 +1264,15 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start all services
         orchestrator.start_all().await.unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         // Stop all services
         let result = orchestrator.stop_all().await;
         assert!(result.is_ok());
-        
+
         // All services should no longer be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(!watcher.is_ready("service1"));
@@ -1138,7 +1285,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1147,7 +1299,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1156,7 +1313,12 @@ mod tests {
         services.insert(
             "frontend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec!["backend".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1169,18 +1331,18 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start all services
         orchestrator.start_all().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         // Stop all services
         let result = orchestrator.stop_all().await;
         if let Err(ref e) = result {
             eprintln!("Stop all failed: {:?}", e);
         }
         assert!(result.is_ok());
-        
+
         // All services should no longer be ready
         let watcher = orchestrator.ready_watcher.lock().await;
         assert!(!watcher.is_ready("database"));
@@ -1192,10 +1354,13 @@ mod tests {
     async fn test_stop_service_nonexistent() {
         let config = create_test_config();
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         let result = orchestrator.stop_service("nonexistent").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OrchestratorError::ServiceNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OrchestratorError::ServiceNotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -1204,7 +1369,12 @@ mod tests {
         services.insert(
             "simple".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1217,17 +1387,20 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start the service
-        orchestrator.start_service_with_deps("simple").await.unwrap();
+        orchestrator
+            .start_service_with_deps("simple")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Restart the service
         let result = orchestrator.restart_service("simple").await;
         assert!(result.is_ok());
-        
+
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         // Service should be ready again
         let is_ready = {
             let watcher = orchestrator.ready_watcher.lock().await;
@@ -1242,7 +1415,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1251,7 +1429,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1264,17 +1447,17 @@ mod tests {
         };
 
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         // Start all services
         orchestrator.start_all().await.unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         // Restart database (should also stop backend)
         let result = orchestrator.restart_service("database").await;
         assert!(result.is_ok());
-        
+
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         // Database should be ready again
         let is_ready = {
             let watcher = orchestrator.ready_watcher.lock().await;
@@ -1287,9 +1470,12 @@ mod tests {
     async fn test_restart_service_nonexistent() {
         let config = create_test_config();
         let mut orchestrator = Orchestrator::new(config).unwrap();
-        
+
         let result = orchestrator.restart_service("nonexistent").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OrchestratorError::ServiceNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OrchestratorError::ServiceNotFound(_)
+        ));
     }
 }

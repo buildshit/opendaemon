@@ -26,6 +26,7 @@ let extensionContext: vscode.ExtensionContext | null = null;
 let logDocumentProvider: LogDocumentProvider | null = null;
 let activityLogger: ActivityLogger | null = null;
 let statusRefreshInterval: NodeJS.Timeout | null = null;
+let statusRefreshInFlight = false;
 
 // Interval for periodic status refresh (as a fallback to real-time notifications)
 const STATUS_REFRESH_INTERVAL_MS = 2000;
@@ -545,6 +546,7 @@ function stopPeriodicStatusRefresh(): void {
     if (statusRefreshInterval) {
         clearInterval(statusRefreshInterval);
         statusRefreshInterval = null;
+        statusRefreshInFlight = false;
 
         if (activityLogger) {
             activityLogger.log('Periodic status refresh stopped');
@@ -561,6 +563,12 @@ async function refreshStatusFromDaemon(): Promise<void> {
         return;
     }
 
+    // Prevent overlapping polling calls when daemon responses are slower than interval.
+    if (statusRefreshInFlight) {
+        return;
+    }
+
+    statusRefreshInFlight = true;
     try {
         const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
         const result = response.services;
@@ -598,6 +606,8 @@ async function refreshStatusFromDaemon(): Promise<void> {
         // Silently ignore errors during background polling
         // The periodic refresh is a fallback, so we don't want to spam errors
         console.debug('[refreshStatusFromDaemon] Error during periodic refresh:', err);
+    } finally {
+        statusRefreshInFlight = false;
     }
 }
 
