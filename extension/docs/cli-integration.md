@@ -114,6 +114,8 @@ dmn start [service]
 - Routes to the active extension daemon first (same runtime as UI/Command Palette)
 - Starts all services (or a single service + dependencies)
 - Falls back to local supervisor mode only when no extension daemon is available
+- In local supervisor mode, prints realtime service activity logs to terminal output (`[timestamp] [service:stream] message`)
+- In extension-daemon mode, realtime daemon `logLine` events are mirrored to the **OpenDaemon CLI** output channel
 
 **Example:**
 ```bash
@@ -525,6 +527,24 @@ If `dmn start` or `dmn stop` don't work as expected:
 
 4. **Try daemon mode**: The extension UI provides more detailed error messages
    - Use the OpenDaemon sidebar instead of CLI commands
+
+---
+
+### Source Changes Not Reflected in Installed Extension
+
+If you updated extension source in the workspace but behavior in Cursor/VS Code still looks old (for example, output channel changes not appearing), repackage and reinstall the extension:
+
+```powershell
+.\scripts\package-and-install-extension.ps1
+```
+
+Or run the OpenDaemon automation service:
+
+```bash
+dmn start extension-package-install
+```
+
+Then reload the editor window.
 
 ---
 

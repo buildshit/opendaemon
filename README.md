@@ -104,9 +104,33 @@ dmn mcp --check
 
 CLI commands (`start`, `stop`, `restart`, `status`) now target the same daemon used by the extension UI/Command Palette when that daemon is running, so both surfaces stay in sync.
 
+When daemon mode is active, realtime service `logLine` notifications are also mirrored in the extension's `OpenDaemon CLI` output channel.
+
 If no extension daemon is available, `dmn` falls back to the local foreground supervisor mode (`dmn start` holds the terminal open, and other CLI commands communicate through `.dmn/runtime-*.json` files).
 
+In local supervisor mode, service activity logs are now streamed live to the CLI output with service + stream context, for example: `[1735689600.123] [frontend:stdout] Server listening on :3000`.
+
 Validated flow in terminal (2026-03-01): `dmn start frontend`, `dmn stop`, `dmn start`, `dmn stop`, `dmn start database`, `dmn restart database`, and `dmn status` all worked as expected with live state reflected from the active controller.
+
+### Extension Dev Packaging Workflow
+
+For extension maintainers, OpenDaemon includes an `extension-package-install` service in `dmn.json` that runs:
+
+- `.\scripts\package-extension-quick.ps1`
+- `.\scripts\install-extension.ps1`
+
+Run it with:
+
+```bash
+dmn start extension-package-install
+```
+
+Notes:
+- This runs `.\scripts\package-extension-quick.ps1` then `.\scripts\install-extension.ps1`.
+- The packaging/install scripts are non-interactive in the normal path (`--force` is used during install), so you typically will not need to type `y`.
+- If any subprocess does prompt, OpenDaemon service terminals can forward stdin input, so interactive confirmation is still possible.
+- This service now lives in your main `dmn.json`, so `dmn start` (all services) can include it. Prefer scoped starts (for example `dmn start frontend`) when you don't want packaging to run.
+- After you see `Workflow complete...`, press `Ctrl+C` (or run `dmn stop`) to end the supervisor session.
 
 Version flags are `--version` / `-V` (lowercase `-v` is not supported).
 

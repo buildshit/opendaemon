@@ -176,6 +176,7 @@ dmn start --config ./config/dev.json
 - Without an extension daemon:
   - Starts local supervisor in current terminal
   - Keeps running in foreground until `dmn stop`/Ctrl+C
+  - Streams realtime service activity logs to CLI output (`[timestamp] [service:stream] message`)
 
 **Exit Codes**:
 - `0` - Start request accepted or supervisor started
@@ -447,6 +448,23 @@ dmn start --config ./config/staging.json
 # Production-like environment
 dmn start --config ./config/prod-local.json
 ```
+
+### Extension Packaging + Install Automation (Maintainers)
+
+```bash
+# Run package + install workflow through OpenDaemon service automation
+dmn start extension-package-install
+```
+
+What this runs:
+- `.\scripts\package-extension-quick.ps1`
+- `.\scripts\install-extension.ps1`
+
+Notes:
+- The install script uses `--force`, so this flow is typically non-interactive (no `y` prompt required).
+- If a subprocess does prompt, OpenDaemon service terminals support stdin forwarding, so you can type into the terminal.
+- This service is in `dmn.json`; use scoped starts (like `dmn start frontend`) when you do not want packaging/install to run during `dmn start`.
+- End the session with `Ctrl+C` (or `dmn stop`) after `Workflow complete...` appears.
 
 ### AI Integration Workflow
 

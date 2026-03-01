@@ -886,6 +886,7 @@ function shouldLogLine(service: string): boolean {
  */
 function handleDaemonNotification(method: string, params: unknown): void {
     console.log('[Daemon notification]:', method, params);
+    const cliLogger = getCLILogger();
 
     try {
         // Log all notifications to activity channel
@@ -1053,6 +1054,9 @@ function handleDaemonNotification(method: string, params: unknown): void {
             if (logManager) {
                 logManager.appendLogLine(service, logLine);
             }
+
+            // Mirror realtime daemon service output to the OpenDaemon CLI channel.
+            cliLogger.logServiceOutput(service, logLine.timestamp, logLine.stream, content);
 
             // Log activity (throttled to avoid spam)
             if (activityLogger && shouldLogLine(service)) {

@@ -115,3 +115,34 @@ This file tracks active reliability, UX, and performance problems we are fixing.
     - Run `dmn stop <service>` and `dmn restart <service>` while extension daemon is active and confirm UI updates accordingly.
     - With no extension daemon running, `dmn start` still works via local supervisor fallback.
     - `dmn mcp --check` exits successfully with valid config and exits non-zero on invalid config.
+
+- [ ] **P13: Local CLI supervisor did not surface realtime service activity logs**
+  - Status: implemented-awaiting-confirmation
+  - Impact: Running `dmn start` without extension daemon showed lifecycle state transitions but missed live stdout/stderr activity from managed services.
+  - Target files: `core/src/cli_runtime.rs`, `README.md`, `DMN_TERMINAL_COMMANDS.md`, `extension/docs/cli-integration.md`
+  - Implementation note: CLI runtime now handles `OrchestratorEvent::LogLine` and streams service log activity in real time, preserving stream context with output format `[timestamp] [service:stream] message` (stdout lines to stdout, stderr lines to stderr).
+  - Verify:
+    - Stop/disable extension daemon so CLI uses local supervisor fallback.
+    - Run `dmn start` and confirm service log lines appear live with `[service:stdout|stderr]` prefixes.
+    - Confirm existing lifecycle lines (`Starting ...`, `... is ready`, `Stopped ...`) still appear.
+
+- [x] **P14: OpenDaemon CLI output channel did not mirror daemon service logLine activity**
+  - Status: confirmed-done (2026-03-01)
+  - Impact: CLI commands routed through extension daemon could run services, but realtime service logs were only visible in terminals/activity paths and not in the `OpenDaemon CLI` output channel.
+  - Target files: `extension/src/extension.ts`, `extension/src/cli-integration/cli-logger.ts`, `extension/docs/cli-integration.md`, `README.md`
+  - Implementation note: Added `CLILogger.logServiceOutput(...)` and now mirror every daemon `logLine` notification into `OpenDaemon CLI` using `[timestamp] [service:stream] message` format. Also validated that packaging+install is required for installed extension runtime to pick up updated `out/` artifacts.
+  - Confirmation note: User confirmed fix in real run (`it works now`) after packaging/install and reload.
+  - Verified:
+    - Keep extension daemon running (`dmn start ...` returns `... via extension daemon`).
+    - Run a service that emits logs and open `OpenDaemon CLI` output channel.
+    - Confirm realtime lines appear with `[service:stdout|stderr]` context.
+
+- [ ] **P15: Manual package/install loop was repetitive for extension testing**
+  - Status: implemented-awaiting-confirmation
+  - Impact: After source changes, local testing required multiple manual steps and made it easier to accidentally validate stale installed extension code.
+  - Target files: `scripts/package-and-install-extension.ps1`, `dmn.json`, `README.md`, `DMN_TERMINAL_COMMANDS.md`, `scripts/README.md`, `extension/PACKAGING.md`, `extension/docs/cli-integration.md`
+  - Implementation note: Added one-step script (`scripts/package-and-install-extension.ps1`) and OpenDaemon automation service (`extension-package-install` in `dmn.json`) that runs quick package + install flow via `dmn start extension-package-install`.
+  - Verify:
+    - Run `dmn start extension-package-install`.
+    - Confirm VSIX is rebuilt and installed into Cursor/VS Code.
+    - Reload editor and verify newest extension behavior is active.

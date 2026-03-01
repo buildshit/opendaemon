@@ -1,0 +1,10 @@
+{
+  "config_path": "\\\\?\\F:\\test-apps\\opendaemon\\dmn.json",
+  "started_at_unix": 1772346247,
+  "heartbeat_unix": 1772346266,
+  "services": {
+    "frontend": "running",
+    "database": "running",
+    "backend-api": "running"
+  }
+}

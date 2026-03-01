@@ -107,6 +107,28 @@ For faster iteration during development:
 
 This only builds for the current platform and skips some verification steps.
 
+### Package + Install Workflow (Maintainer Fast Loop)
+
+Run both quick packaging and extension installation in one step:
+
+**Windows**:
+```powershell
+.\scripts\package-and-install-extension.ps1
+```
+
+This script runs:
+1. `.\scripts\package-extension-quick.ps1`
+2. `.\scripts\install-extension.ps1`
+
+OpenDaemon service automation is also available:
+
+```bash
+dmn start extension-package-install
+```
+
+The install step uses `--force`, so this workflow is normally non-interactive.
+After `Workflow complete...` appears in local supervisor mode, stop the session with `Ctrl+C` (or `dmn stop`).
+
 ## Testing
 
 ### Test Package Contents

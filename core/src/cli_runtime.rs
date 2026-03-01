@@ -1,4 +1,5 @@
 use crate::config::{parse_config, DmnConfig};
+use crate::logs::{LogLine, LogStream};
 use crate::orchestrator::{Orchestrator, OrchestratorEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -194,7 +195,9 @@ pub async fn run_start_command(config_path: PathBuf, service: Option<String>) ->
                     OrchestratorEvent::Error { message, category } => {
                         eprintln!("[{}] {}", category, message);
                     }
-                    OrchestratorEvent::LogLine { .. } => {}
+                    OrchestratorEvent::LogLine { service, line } => {
+                        print_cli_activity_log(&service, &line);
+                    }
                 }
                 if should_persist {
                     state_guard.heartbeat_unix = now_unix_secs();
@@ -604,6 +607,29 @@ fn compact_error(error: &str) -> String {
     }
 }
 
+fn print_cli_activity_log(service: &str, line: &LogLine) {
+    let formatted = format_cli_activity_log(service, line);
+    match line.stream {
+        LogStream::Stdout => println!("{}", formatted),
+        LogStream::Stderr => eprintln!("{}", formatted),
+    }
+}
+
+fn format_cli_activity_log(service: &str, line: &LogLine) -> String {
+    let stream = match line.stream {
+        LogStream::Stdout => "stdout",
+        LogStream::Stderr => "stderr",
+    };
+
+    format!(
+        "[{}] [{}:{}] {}",
+        line.timestamp_str(),
+        service,
+        stream,
+        line.content
+    )
+}
+
 fn display_status(raw: &str) -> String {
     match raw {
         STATUS_NOT_STARTED => "Not Started".to_string(),
@@ -844,5 +870,29 @@ mod tests {
         assert_eq!(deserialized.action, ACTION_START_SERVICE);
         assert_eq!(deserialized.service.as_deref(), Some("api"));
         assert_eq!(deserialized.requested_at_unix, 123);
+    }
+
+    #[test]
+    fn test_format_cli_activity_log_stdout() {
+        let line = LogLine {
+            timestamp: UNIX_EPOCH + Duration::from_millis(1_234_567),
+            content: "Server started".to_string(),
+            stream: LogStream::Stdout,
+        };
+
+        let formatted = format_cli_activity_log("api", &line);
+        assert_eq!(formatted, "[1234.567] [api:stdout] Server started");
+    }
+
+    #[test]
+    fn test_format_cli_activity_log_stderr() {
+        let line = LogLine {
+            timestamp: UNIX_EPOCH + Duration::from_millis(42_000),
+            content: "Connection refused".to_string(),
+            stream: LogStream::Stderr,
+        };
+
+        let formatted = format_cli_activity_log("database", &line);
+        assert_eq!(formatted, "[42.000] [database:stderr] Connection refused");
     }
 }

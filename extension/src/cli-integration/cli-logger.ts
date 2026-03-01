@@ -143,6 +143,14 @@ export class CLILogger {
     }
 
     /**
+     * Log a service output line from daemon notifications.
+     * Uses raw output formatting so realtime service logs are easy to scan.
+     */
+    logServiceOutput(service: string, timestampIso: string, stream: 'stdout' | 'stderr', content: string): void {
+        this.outputChannel.appendLine(`[${timestampIso}] [${service}:${stream}] ${content}`);
+    }
+
+    /**
      * Disposes of the output channel
      */
     dispose(): void {
