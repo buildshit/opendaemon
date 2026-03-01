@@ -4,12 +4,13 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "Quick packaging OpenDaemon VS Code extension..." -ForegroundColor Green
 
-# Ensure binary exists and is up-to-date with core sources
-$binaryPath = "extension/bin/dmn-win32-x64.exe"
-$shouldBuildBinary = -not (Test-Path $binaryPath)
+# Ensure dist binary exists and is up-to-date with core sources.
+# We always run bundle-extension.ps1 afterwards so dmn.exe/cmd wrappers stay in sync.
+$distBinaryPath = "dist/dmn-win32-x64.exe"
+$shouldBuildBinary = -not (Test-Path $distBinaryPath)
 
 if (-not $shouldBuildBinary) {
-    $binaryTimestamp = (Get-Item $binaryPath).LastWriteTimeUtc
+    $binaryTimestamp = (Get-Item $distBinaryPath).LastWriteTimeUtc
     $coreInputs = @("core/src", "core/Cargo.toml", "Cargo.toml", "Cargo.lock")
 
     foreach ($inputPath in $coreInputs) {
@@ -36,10 +37,17 @@ if (-not $shouldBuildBinary) {
 if ($shouldBuildBinary) {
     Write-Host "Daemon binary missing or stale, building..." -ForegroundColor Yellow
     & .\scripts\build-current.ps1
-    New-Item -ItemType Directory -Force -Path extension/bin | Out-Null
-    Copy-Item dist/dmn-win32-x64.exe extension/bin/ -Force
+    if (-not $?) {
+        throw "Binary build failed"
+    }
 } else {
-    Write-Host "Using existing daemon binary (up-to-date)." -ForegroundColor DarkGray
+    Write-Host "Using existing dist daemon binary (up-to-date)." -ForegroundColor DarkGray
+}
+
+Write-Host "Bundling binaries and wrappers into extension/bin..." -ForegroundColor Cyan
+& .\scripts\bundle-extension.ps1
+if (-not $?) {
+    throw "Binary bundling failed"
 }
 
 # Compile TypeScript

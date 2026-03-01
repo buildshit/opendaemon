@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 
 export class DaemonManager {
@@ -26,9 +27,9 @@ export class DaemonManager {
 
         const binaryPath = this.getBinaryPath();
         
-        console.log(`Starting daemon: ${binaryPath} daemon`);
+        console.log(`Starting daemon: ${binaryPath} daemon --config ${configPath}`);
         
-        this.process = spawn(binaryPath, ['daemon'], {
+        this.process = spawn(binaryPath, ['daemon', '--config', configPath], {
             cwd: path.dirname(configPath),
             stdio: ['pipe', 'pipe', 'pipe']
         });
@@ -96,20 +97,31 @@ export class DaemonManager {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            
-            // Check for release build first, then debug
-            const releasePath = path.join(workspaceRoot, 'target', 'release', platform === 'win32' ? 'dmn.exe' : 'dmn');
-            const debugPath = path.join(workspaceRoot, 'target', 'debug', platform === 'win32' ? 'dmn.exe' : 'dmn');
-            
-            // Use fs.existsSync to check if file exists
-            const fs = require('fs');
-            if (fs.existsSync(releasePath)) {
-                console.log(`[DaemonManager] Using local release binary: ${releasePath}`);
-                return releasePath;
+
+            const executableName = platform === 'win32' ? 'dmn.exe' : 'dmn';
+            const localCandidates = [
+                path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
+                path.join(workspaceRoot, 'target', 'release', executableName),
+                path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName),
+                path.join(workspaceRoot, 'target', 'debug', executableName)
+            ];
+
+            let selectedPath: string | null = null;
+            let selectedMtime = -1;
+            for (const candidate of localCandidates) {
+                if (!fs.existsSync(candidate)) {
+                    continue;
+                }
+                const mtime = fs.statSync(candidate).mtimeMs;
+                if (mtime > selectedMtime) {
+                    selectedMtime = mtime;
+                    selectedPath = candidate;
+                }
             }
-            if (fs.existsSync(debugPath)) {
-                console.log(`[DaemonManager] Using local debug binary: ${debugPath}`);
-                return debugPath;
+
+            if (selectedPath) {
+                console.log(`[DaemonManager] Using newest local binary: ${selectedPath}`);
+                return selectedPath;
             }
         }
         

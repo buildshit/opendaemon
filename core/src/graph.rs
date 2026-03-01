@@ -1,6 +1,6 @@
 use crate::config::DmnConfig;
-use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::algo::{is_cyclic_directed, toposort};
+use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -40,20 +40,20 @@ impl ServiceGraph {
         // Second pass: create edges for dependencies
         for (service_name, service_config) in &config.services {
             let service_node = node_map[service_name];
-            
+
             for dependency in &service_config.depends_on {
                 // Get the dependency node
                 let dep_node = node_map
                     .get(dependency)
                     .ok_or_else(|| GraphError::ServiceNotFound(dependency.clone()))?;
-                
+
                 // Add edge from dependency to service (dependency -> service)
                 graph.add_edge(*dep_node, service_node, ());
             }
         }
 
         let service_graph = Self { graph, node_map };
-        
+
         // Check for cycles after building the graph
         service_graph.check_cycles()?;
 
@@ -82,15 +82,13 @@ impl ServiceGraph {
             let mut visited = vec![false; self.graph.node_count()];
             let mut rec_stack = vec![false; self.graph.node_count()];
             let mut path = Vec::new();
-            
+
             if self.dfs_find_cycle(start_node, &mut visited, &mut rec_stack, &mut path) {
                 // Found a cycle, extract service names from path
-                return path.iter()
-                    .map(|&idx| self.graph[idx].clone())
-                    .collect();
+                return path.iter().map(|&idx| self.graph[idx].clone()).collect();
             }
         }
-        
+
         // Shouldn't reach here if is_cyclic_directed returned true
         vec!["unknown cycle".to_string()]
     }
@@ -104,28 +102,28 @@ impl ServiceGraph {
         path: &mut Vec<NodeIndex>,
     ) -> bool {
         let node_idx = node.index();
-        
+
         if rec_stack[node_idx] {
             // Found a cycle, add current node to complete the cycle
             path.push(node);
             return true;
         }
-        
+
         if visited[node_idx] {
             return false;
         }
-        
+
         visited[node_idx] = true;
         rec_stack[node_idx] = true;
         path.push(node);
-        
+
         // Visit all neighbors
         for neighbor in self.graph.neighbors(node) {
             if self.dfs_find_cycle(neighbor, visited, rec_stack, path) {
                 return true;
             }
         }
-        
+
         // Backtrack
         rec_stack[node_idx] = false;
         path.pop();
@@ -192,7 +190,7 @@ impl ServiceGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ServiceConfig, DmnConfig};
+    use crate::config::{DmnConfig, ServiceConfig};
     use std::collections::HashMap;
 
     #[test]

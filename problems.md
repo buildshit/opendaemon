@@ -8,9 +8,9 @@ This file tracks active reliability, UX, and performance problems we are fixing.
 - Keep items here as "open" or "implemented-awaiting-confirmation" while testing.
 - After confirmation, move the finalized notes to the appropriate long-term docs.
 
-## Active Problems
+## fixed Problems
 
-- [ ] **P1: RPC line framing drops partial JSON messages**
+- [x] **P1: RPC line framing drops partial JSON messages**
   - Status: implemented-awaiting-confirmation
   - Impact: Random timeouts/missing notifications when stop/start responses are split across chunks.
   - Target files: `extension/src/rpc-client.ts`, `core/src/rpc.rs`
@@ -91,3 +91,25 @@ This file tracks active reliability, UX, and performance problems we are fixing.
   - Verify:
     - Unexpected service exits emit `serviceFailed`/`serviceStopped` events promptly.
     - Tree status and terminal cleanup stay in sync without waiting for manual actions.
+
+- [ ] **P11: Direct CLI commands were not stateful across invocations**
+  - Status: implemented-awaiting-confirmation
+  - Impact: `dmn status`/`dmn stop` used fresh in-memory state, so real service lifecycle from prior commands could not be controlled or observed reliably.
+  - Target files: `core/src/main.rs`, `core/src/cli_runtime.rs`, `README.md`, `DMN_TERMINAL_COMMANDS.md`, `extension/docs/cli-integration.md`
+  - Implementation note: Added a local CLI supervisor runtime with heartbeat + control files (`.dmn/runtime-state.json`, `.dmn/runtime-control.json`) so `start/stop/status` work across terminals; also added service-scoped commands (`dmn start <service>`, `dmn stop <service>`, `dmn restart <service>`, `dmn status <service>`).
+  - Verify:
+    - `dmn start` launches supervisor and keeps services manageable until `dmn stop`.
+    - `dmn start <service>` starts target service (with dependencies) when supervisor is already running.
+    - `dmn stop <service>` and `dmn restart <service>` operate on individual services.
+    - `dmn status` and `dmn status <service>` reflect supervisor-tracked lifecycle state.
+
+- [ ] **P12: CLI and extension UI controlled different service runtimes**
+  - Status: implemented-awaiting-confirmation
+  - Impact: Services started from Command Palette/UI could not be reliably managed from CLI (`start`/`stop`/`restart`/`status`) because CLI was not targeting the extension daemon runtime.
+  - Target files: `core/src/main.rs`, `core/src/rpc.rs`, `core/src/cli_daemon_client.rs`, `extension/src/daemon.ts`, `extension/src/cli-integration/binary-resolver.ts`, `extension/src/cli-integration/cli-integration-manager.ts`, `extension/src/cli-integration/terminal-interceptor.ts`, `scripts/package-extension-quick.ps1`, `README.md`, `DMN_TERMINAL_COMMANDS.md`, `extension/docs/cli-integration.md`
+  - Implementation note: Added a local daemon IPC bridge (`.dmn/daemon-ipc.json`) published by `dmn daemon`; CLI direct commands now route to that daemon first (shared runtime with UI/Command Palette) and only fall back to local supervisor mode when daemon IPC is unavailable. CLI terminal integration now prefers workspace-built binaries when available and selects the newest local candidate across `target/build-current/*` + `target/*`, preventing stale `target/release/dmn.exe` from masking newer CLI builds. On Windows, terminal binary detection now prioritizes `dmn.exe`/`dmn-win32-x64.exe` over Unix wrapper files, and quick packaging now always re-runs `bundle-extension.ps1` so `extension/bin/dmn.exe` cannot become stale versus `dmn-win32-x64.exe`. Also added `dmn mcp --check` for MCP preflight validation.
+  - Verify:
+    - Start/stop/restart a service from UI, then run `dmn status <service>` and confirm it reflects the same lifecycle (`Controller: extension-daemon`).
+    - Run `dmn stop <service>` and `dmn restart <service>` while extension daemon is active and confirm UI updates accordingly.
+    - With no extension daemon running, `dmn start` still works via local supervisor fallback.
+    - `dmn mcp --check` exits successfully with valid config and exits non-zero on invalid config.

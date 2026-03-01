@@ -46,7 +46,8 @@ export class CLIIntegrationManager {
 
       // 2. Resolve binary path
       this.logger.info('Step 2: Resolving binary path...');
-      this.binaryInfo = resolveBinary(this.context.extensionPath, this.platform);
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      this.binaryInfo = resolveBinary(this.context.extensionPath, this.platform, workspaceRoot);
       this.logger.info(`Binary info:`);
       this.logger.info(`  Name: ${this.binaryInfo.name}`);
       this.logger.info(`  Full path: ${this.binaryInfo.fullPath}`);

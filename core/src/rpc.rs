@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 use crate::orchestrator::Orchestrator;
+
+const DAEMON_IPC_FILENAME: &str = "daemon-ipc.json";
 
 /// JSON-RPC 2.0 request from the VS Code extension
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -283,11 +288,44 @@ impl RpcRequest {
 /// RPC Server that communicates via stdin/stdout
 pub struct RpcServer {
     orchestrator: Arc<Mutex<Orchestrator>>,
+    ipc_config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DaemonIpcInfo {
+    config_path: String,
+    address: String,
+    pid: u32,
+    created_at_unix: u64,
+}
+
+#[derive(Debug)]
+struct IpcRegistration {
+    info_path: PathBuf,
+    address: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for IpcRegistration {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_file(&self.info_path);
+    }
 }
 
 impl RpcServer {
     pub fn new(orchestrator: Arc<Mutex<Orchestrator>>) -> Self {
-        Self { orchestrator }
+        Self {
+            orchestrator,
+            ipc_config_path: None,
+        }
+    }
+
+    pub fn with_cli_ipc(orchestrator: Arc<Mutex<Orchestrator>>, config_path: PathBuf) -> Self {
+        Self {
+            orchestrator,
+            ipc_config_path: Some(config_path),
+        }
     }
 
     /// Run the RPC server, reading from stdin and writing to stdout
@@ -315,6 +353,23 @@ impl RpcServer {
                 orch.reconcile_exited_processes().await;
             }
         });
+
+        // Expose a local loopback IPC endpoint so CLI commands can talk to
+        // the same daemon instance used by the extension.
+        let _ipc_registration = if let Some(config_path) = self.ipc_config_path.as_ref() {
+            match Self::start_cli_ipc_server(Arc::clone(&self.orchestrator), config_path).await {
+                Ok(registration) => {
+                    eprintln!("CLI IPC listening on {}", registration.address);
+                    Some(registration)
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to start CLI IPC server: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         loop {
             line.clear();
@@ -365,6 +420,124 @@ impl RpcServer {
         out.write_all(b"\n").await?;
         out.flush().await?;
         Ok(())
+    }
+
+    async fn start_cli_ipc_server(
+        orchestrator: Arc<Mutex<Orchestrator>>,
+        config_path: &Path,
+    ) -> Result<IpcRegistration, std::io::Error> {
+        let runtime_dir = Self::runtime_dir_for_config(config_path);
+        std::fs::create_dir_all(&runtime_dir)?;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?.to_string();
+        let info_path = runtime_dir.join(DAEMON_IPC_FILENAME);
+        let info = DaemonIpcInfo {
+            config_path: Self::config_identity(config_path),
+            address: address.clone(),
+            pid: std::process::id(),
+            created_at_unix: Self::now_unix_secs(),
+        };
+        let payload = serde_json::to_string_pretty(&info).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("failed to serialize daemon IPC info: {}", e),
+            )
+        })?;
+        std::fs::write(&info_path, payload)?;
+
+        let task = tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        eprintln!("CLI IPC accept error: {}", e);
+                        break;
+                    }
+                };
+
+                let orchestrator_for_client = Arc::clone(&orchestrator);
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        Self::handle_cli_ipc_client(stream, orchestrator_for_client).await
+                    {
+                        eprintln!("CLI IPC client error: {}", e);
+                    }
+                });
+            }
+        });
+
+        Ok(IpcRegistration {
+            info_path,
+            address,
+            task,
+        })
+    }
+
+    async fn handle_cli_ipc_client(
+        stream: TcpStream,
+        orchestrator: Arc<Mutex<Orchestrator>>,
+    ) -> Result<(), std::io::Error> {
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let bytes_read = reader.read_line(&mut line).await?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+                Ok(json_req) => match RpcRequest::from_json_rpc(&json_req) {
+                    Ok(req) => {
+                        Self::handle_request_with_orchestrator(&orchestrator, json_req.id, req)
+                            .await
+                    }
+                    Err(err) => JsonRpcResponse::error(json_req.id, err),
+                },
+                Err(e) => {
+                    JsonRpcResponse::error(0, RpcError::parse_error(format!("Invalid JSON: {}", e)))
+                }
+            };
+
+            let response_json = serde_json::to_string(&response).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to serialize JSON-RPC response: {}", e),
+                )
+            })?;
+            write_half.write_all(response_json.as_bytes()).await?;
+            write_half.write_all(b"\n").await?;
+            write_half.flush().await?;
+        }
+
+        Ok(())
+    }
+
+    fn runtime_dir_for_config(config_path: &Path) -> PathBuf {
+        let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+        config_dir.join(".dmn")
+    }
+
+    fn config_identity(config_path: &Path) -> String {
+        std::fs::canonicalize(config_path)
+            .unwrap_or_else(|_| config_path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn now_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     /// Stream orchestrator events as JSON-RPC notifications
@@ -451,23 +624,31 @@ impl RpcServer {
 
     /// Handle a parsed RPC request and return a response
     async fn handle_request(&self, id: u64, request: RpcRequest) -> JsonRpcResponse {
+        Self::handle_request_with_orchestrator(&self.orchestrator, id, request).await
+    }
+
+    async fn handle_request_with_orchestrator(
+        orchestrator: &Arc<Mutex<Orchestrator>>,
+        id: u64,
+        request: RpcRequest,
+    ) -> JsonRpcResponse {
         match request {
             RpcRequest::StartAll => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.start_all().await {
                     Ok(_) => JsonRpcResponse::success(id, json!({"status": "started"})),
                     Err(e) => JsonRpcResponse::error(id, RpcError::internal_error(e.to_string())),
                 }
             }
             RpcRequest::StopAll => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.stop_all().await {
                     Ok(_) => JsonRpcResponse::success(id, json!({"status": "stopped"})),
                     Err(e) => JsonRpcResponse::error(id, RpcError::internal_error(e.to_string())),
                 }
             }
             RpcRequest::StartService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.start_service_with_deps(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -477,7 +658,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::StopService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.stop_service(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -487,7 +668,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::RestartService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.restart_service(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -497,7 +678,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::GetStatus => {
-                let orch = self.orchestrator.lock().await;
+                let orch = orchestrator.lock().await;
                 let spawned_statuses = orch.process_manager.get_all_statuses();
 
                 // Check ready watcher state for accurate status
@@ -542,7 +723,7 @@ impl RpcServer {
                 JsonRpcResponse::success(id, json!({"services": status_map}))
             }
             RpcRequest::GetLogs { service, lines } => {
-                let orch = self.orchestrator.lock().await;
+                let orch = orchestrator.lock().await;
 
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {
@@ -587,7 +768,7 @@ impl RpcServer {
                 )
             }
             RpcRequest::WriteStdin { service, data } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
 
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {
@@ -606,7 +787,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::GetDependencies { service } => {
-                let orch = self.orchestrator.lock().await;
+                let orch = orchestrator.lock().await;
 
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {

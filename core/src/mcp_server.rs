@@ -189,27 +189,29 @@ impl DmnMcpServer {
             }
         };
 
-        let lines = match arguments.get("lines") {
-            Some(Value::String(s)) if s == "all" => LogLineCount::All,
-            Some(Value::Number(n)) => {
-                if let Some(num) = n.as_u64() {
-                    LogLineCount::Last(num as usize)
-                } else {
-                    return McpToolResult::Error {
-                        error: "Invalid 'lines' parameter: must be a positive number or 'all'".to_string(),
-                    };
+        let lines =
+            match arguments.get("lines") {
+                Some(Value::String(s)) if s == "all" => LogLineCount::All,
+                Some(Value::Number(n)) => {
+                    if let Some(num) = n.as_u64() {
+                        LogLineCount::Last(num as usize)
+                    } else {
+                        return McpToolResult::Error {
+                            error: "Invalid 'lines' parameter: must be a positive number or 'all'"
+                                .to_string(),
+                        };
+                    }
                 }
-            }
-            _ => {
-                return McpToolResult::Error {
-                    error: "Missing or invalid 'lines' parameter: must be a positive number or 'all'".to_string(),
-                }
-            }
-        };
+                _ => return McpToolResult::Error {
+                    error:
+                        "Missing or invalid 'lines' parameter: must be a positive number or 'all'"
+                            .to_string(),
+                },
+            };
 
         // Get logs from orchestrator
         let orch = self.orchestrator.lock().await;
-        
+
         // Check if service exists
         if !orch.config().services.contains_key(service) {
             return McpToolResult::Error {
@@ -237,7 +239,7 @@ impl DmnMcpServer {
     /// Handle get_service_status tool call
     async fn handle_get_service_status(&self) -> McpToolResult {
         let orch = self.orchestrator.lock().await;
-        
+
         let mut statuses = Vec::new();
         for service_name in orch.config().services.keys() {
             let status = orch
@@ -245,7 +247,7 @@ impl DmnMcpServer {
                 .get_status(service_name)
                 .map(|s| format!("{:?}", s))
                 .unwrap_or_else(|| "NotStarted".to_string());
-            
+
             statuses.push(format!("{}: {}", service_name, status));
         }
 
@@ -263,7 +265,9 @@ impl DmnMcpServer {
         let services_text = services.join("\n");
 
         McpToolResult::Success {
-            content: vec![McpContent::Text { text: services_text }],
+            content: vec![McpContent::Text {
+                text: services_text,
+            }],
         }
     }
 
@@ -274,7 +278,7 @@ impl DmnMcpServer {
 
         for line in stdin.lock().lines() {
             let line = line?;
-            
+
             // Parse the JSON-RPC request
             let request: McpRequest = match serde_json::from_str(&line) {
                 Ok(req) => req,
@@ -297,7 +301,7 @@ impl DmnMcpServer {
 
             // Handle the request
             let response = self.handle_request(request).await;
-            
+
             // Send response
             writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
             stdout.flush()?;
@@ -377,7 +381,7 @@ impl DmnMcpServer {
 
                 // Execute tool call
                 let result = self.handle_tool_call(tool_call).await;
-                
+
                 McpResponse {
                     jsonrpc: "2.0".to_string(),
                     id: request.id,
@@ -446,10 +450,10 @@ mod tests {
         let orch = create_test_orchestrator();
         let mut server = DmnMcpServer::new(orch);
         assert!(!server.is_authenticated());
-        
+
         server.set_authenticated(true);
         assert!(server.is_authenticated());
-        
+
         server.set_authenticated(false);
         assert!(!server.is_authenticated());
     }
@@ -459,7 +463,7 @@ mod tests {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new(orch);
         let tools = server.get_tools();
-        
+
         assert_eq!(tools.len(), 3);
         assert!(tools.iter().any(|t| t.name == "read_logs"));
         assert!(tools.iter().any(|t| t.name == "get_service_status"));
@@ -470,9 +474,9 @@ mod tests {
     async fn test_handle_list_services() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let result = server.handle_list_services().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -525,9 +529,9 @@ mod tests {
         let orchestrator = Orchestrator::new(config).unwrap();
         let orch = Arc::new(Mutex::new(orchestrator));
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let result = server.handle_list_services().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -556,9 +560,9 @@ mod tests {
         let orchestrator = Orchestrator::new(config).unwrap();
         let orch = Arc::new(Mutex::new(orchestrator));
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let result = server.handle_list_services().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -577,9 +581,9 @@ mod tests {
     async fn test_handle_get_service_status() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let result = server.handle_get_service_status().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -624,9 +628,9 @@ mod tests {
         let orchestrator = Orchestrator::new(config).unwrap();
         let orch = Arc::new(Mutex::new(orchestrator));
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let result = server.handle_get_service_status().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -647,7 +651,11 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10".to_string() } else { "sleep 10".to_string() },
+                command: if cfg!(windows) {
+                    "timeout /t 10".to_string()
+                } else {
+                    "sleep 10".to_string()
+                },
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -662,20 +670,30 @@ mod tests {
         let orchestrator = Orchestrator::new(config).unwrap();
         let orch = Arc::new(Mutex::new(orchestrator));
         let server = DmnMcpServer::new_authenticated(orch.clone());
-        
+
         // Start a service
         {
             let mut orch_lock = orch.lock().await;
-            let service_config = orch_lock.config().services.get("test_service").unwrap().clone();
-            let _ = orch_lock.process_manager.spawn_service("test_service", &service_config).await;
-            orch_lock.process_manager.update_status("test_service", crate::process::ServiceStatus::Running);
+            let service_config = orch_lock
+                .config()
+                .services
+                .get("test_service")
+                .unwrap()
+                .clone();
+            let _ = orch_lock
+                .process_manager
+                .spawn_service("test_service", &service_config)
+                .await;
+            orch_lock
+                .process_manager
+                .update_status("test_service", crate::process::ServiceStatus::Running);
         }
-        
+
         // Give it a moment to start
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        
+
         let result = server.handle_get_service_status().await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -688,7 +706,7 @@ mod tests {
             }
             _ => panic!("Expected success result"),
         }
-        
+
         // Clean up
         {
             let mut orch_lock = orch.lock().await;
@@ -700,14 +718,14 @@ mod tests {
     async fn test_handle_read_logs_invalid_service() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let args = json!({
             "service": "nonexistent",
             "lines": 10
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert!(error.contains("Service not found"));
@@ -720,11 +738,11 @@ mod tests {
     async fn test_handle_read_logs_missing_params() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let args = json!({});
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert!(error.contains("Missing"));
@@ -737,14 +755,14 @@ mod tests {
     async fn test_handle_tool_call_unknown_tool() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let call = McpToolCall {
             name: "unknown_tool".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert!(error.contains("Unknown tool"));
@@ -757,14 +775,14 @@ mod tests {
     async fn test_authentication_check() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new(orch); // Unauthenticated by default
-        
+
         let call = McpToolCall {
             name: "list_services".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert!(error.contains("Authentication required"));
@@ -777,7 +795,7 @@ mod tests {
     async fn test_authentication_check_read_logs() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new(orch);
-        
+
         let call = McpToolCall {
             name: "read_logs".to_string(),
             arguments: json!({
@@ -785,9 +803,9 @@ mod tests {
                 "lines": 10
             }),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert_eq!(error, "Authentication required");
@@ -800,14 +818,14 @@ mod tests {
     async fn test_authentication_check_get_service_status() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new(orch);
-        
+
         let call = McpToolCall {
             name: "get_service_status".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert_eq!(error, "Authentication required");
@@ -820,15 +838,15 @@ mod tests {
     async fn test_authenticated_tools_work() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         // Test list_services works when authenticated
         let call = McpToolCall {
             name: "list_services".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Success { .. } => {
                 // Success expected
@@ -841,7 +859,7 @@ mod tests {
     async fn test_authenticated_read_logs_works() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let call = McpToolCall {
             name: "read_logs".to_string(),
             arguments: json!({
@@ -849,9 +867,9 @@ mod tests {
                 "lines": 10
             }),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Success { .. } => {
                 // Success expected
@@ -864,14 +882,14 @@ mod tests {
     async fn test_authenticated_get_service_status_works() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let call = McpToolCall {
             name: "get_service_status".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call).await;
-        
+
         match result {
             McpToolResult::Success { .. } => {
                 // Success expected
@@ -884,21 +902,21 @@ mod tests {
     async fn test_authentication_toggle() {
         let orch = create_test_orchestrator();
         let mut server = DmnMcpServer::new(orch);
-        
+
         // Initially unauthenticated
         let call = McpToolCall {
             name: "list_services".to_string(),
             arguments: json!({}),
         };
-        
+
         let result = server.handle_tool_call(call.clone()).await;
         assert!(matches!(result, McpToolResult::Error { .. }));
-        
+
         // Authenticate
         server.set_authenticated(true);
         let result = server.handle_tool_call(call.clone()).await;
         assert!(matches!(result, McpToolResult::Success { .. }));
-        
+
         // Deauthenticate
         server.set_authenticated(false);
         let result = server.handle_tool_call(call).await;
@@ -909,7 +927,7 @@ mod tests {
     async fn test_handle_read_logs_with_number() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch.clone());
-        
+
         // Add some logs to the buffer
         {
             let orch_lock = orch.lock().await;
@@ -925,14 +943,14 @@ mod tests {
                 );
             }
         }
-        
+
         let args = json!({
             "service": "test_service",
             "lines": 5
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -956,7 +974,7 @@ mod tests {
     async fn test_handle_read_logs_with_all() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch.clone());
-        
+
         // Add some logs to the buffer
         {
             let orch_lock = orch.lock().await;
@@ -972,14 +990,14 @@ mod tests {
                 );
             }
         }
-        
+
         let args = json!({
             "service": "test_service",
             "lines": "all"
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -999,14 +1017,14 @@ mod tests {
     async fn test_handle_read_logs_empty_buffer() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let args = json!({
             "service": "test_service",
             "lines": 10
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Success { content } => {
                 assert_eq!(content.len(), 1);
@@ -1025,14 +1043,14 @@ mod tests {
     async fn test_handle_read_logs_invalid_lines_param() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let args = json!({
             "service": "test_service",
             "lines": "invalid"
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
                 assert!(error.contains("Missing or invalid"));
@@ -1045,17 +1063,20 @@ mod tests {
     async fn test_handle_read_logs_negative_lines() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let args = json!({
             "service": "test_service",
             "lines": -5
         });
-        
+
         let result = server.handle_read_logs(args).await;
-        
+
         match result {
             McpToolResult::Error { error } => {
-                assert!(error.contains("Missing or invalid") || error.contains("must be a positive number"));
+                assert!(
+                    error.contains("Missing or invalid")
+                        || error.contains("must be a positive number")
+                );
             }
             _ => panic!("Expected error result"),
         }
@@ -1065,21 +1086,21 @@ mod tests {
     async fn test_handle_request_tools_list() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(1)),
             method: "tools/list".to_string(),
             params: None,
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(1)));
         assert!(response.result.is_some());
         assert!(response.error.is_none());
-        
+
         let result = response.result.unwrap();
         let tools = result.get("tools").unwrap().as_array().unwrap();
         assert_eq!(tools.len(), 3);
@@ -1089,7 +1110,7 @@ mod tests {
     async fn test_handle_request_tools_call_list_services() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(2)),
@@ -1099,9 +1120,9 @@ mod tests {
                 "arguments": {}
             })),
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(2)));
         assert!(response.result.is_some());
@@ -1112,7 +1133,7 @@ mod tests {
     async fn test_handle_request_tools_call_read_logs() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(3)),
@@ -1125,9 +1146,9 @@ mod tests {
                 }
             })),
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(3)));
         assert!(response.result.is_some());
@@ -1138,7 +1159,7 @@ mod tests {
     async fn test_handle_request_tools_call_get_service_status() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(4)),
@@ -1148,9 +1169,9 @@ mod tests {
                 "arguments": {}
             })),
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(4)));
         assert!(response.result.is_some());
@@ -1161,21 +1182,21 @@ mod tests {
     async fn test_handle_request_unknown_method() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(5)),
             method: "unknown/method".to_string(),
             params: None,
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(5)));
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let error = response.error.unwrap();
         assert_eq!(error.code, -32601);
         assert!(error.message.contains("Method not found"));
@@ -1185,21 +1206,21 @@ mod tests {
     async fn test_handle_request_tools_call_missing_params() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(6)),
             method: "tools/call".to_string(),
             params: None,
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(6)));
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let error = response.error.unwrap();
         assert_eq!(error.code, -32602);
         assert!(error.message.contains("Missing params"));
@@ -1209,21 +1230,21 @@ mod tests {
     async fn test_handle_request_tools_call_invalid_params() {
         let orch = create_test_orchestrator();
         let server = DmnMcpServer::new_authenticated(orch);
-        
+
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(7)),
             method: "tools/call".to_string(),
             params: Some(json!("invalid")),
         };
-        
+
         let response = server.handle_request(request).await;
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, Some(json!(7)));
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let error = response.error.unwrap();
         assert_eq!(error.code, -32602);
         assert!(error.message.contains("Invalid params"));

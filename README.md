@@ -77,15 +77,34 @@ dmn --version
 # View all commands
 dmn --help
 
-# Check service status
-dmn status
-
 # Start all services
 dmn start
 
+# Start one service (and its dependencies)
+dmn start frontend
+
+# Check all service statuses
+dmn status
+
+# Check one service status
+dmn status frontend
+
+# Stop one service
+dmn stop frontend
+
+# Restart one service
+dmn restart frontend
+
 # Stop all services
 dmn stop
+
+# Validate MCP setup and config
+dmn mcp --check
 ```
+
+CLI commands (`start`, `stop`, `restart`, `status`) now target the same daemon used by the extension UI/Command Palette when that daemon is running, so both surfaces stay in sync.
+
+If no extension daemon is available, `dmn` falls back to the local foreground supervisor mode (`dmn start` holds the terminal open, and other CLI commands communicate through `.dmn/runtime-*.json` files).
 
 **📚 Learn more:** [CLI Integration Guide](extension/docs/cli-integration.md)
 

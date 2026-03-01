@@ -368,8 +368,18 @@ export class TerminalInterceptor {
     private findBinaryInDir(binDir: string): string | undefined {
         try {
             const files = fs.readdirSync(binDir);
-            const binaryFile = files.find(file => file.startsWith('dmn-') || file === 'dmn');
-            return binaryFile ? `${binDir}/${binaryFile}` : undefined;
+            const prioritizedCandidates = os.platform() === 'win32'
+                ? ['dmn.exe', 'dmn-win32-x64.exe', 'dmn.cmd', 'dmn']
+                : ['dmn', 'dmn-linux-x64', 'dmn-darwin-arm64', 'dmn-darwin-x64'];
+
+            for (const candidate of prioritizedCandidates) {
+                if (files.includes(candidate)) {
+                    return `${binDir}/${candidate}`;
+                }
+            }
+
+            const fallback = files.find(file => file.startsWith('dmn-') || file === 'dmn');
+            return fallback ? `${binDir}/${fallback}` : undefined;
         } catch (error) {
             return undefined;
         }

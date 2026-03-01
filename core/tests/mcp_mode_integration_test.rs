@@ -111,7 +111,10 @@ fn test_mcp_mode_list_services() {
     // Verify response
     if let Ok(response_str) = read_result {
         if !response_str.is_empty() {
-            assert!(response_str.contains("jsonrpc"), "Expected JSON-RPC response");
+            assert!(
+                response_str.contains("jsonrpc"),
+                "Expected JSON-RPC response"
+            );
             // MCP responses should contain result or error
             assert!(
                 response_str.contains("result") || response_str.contains("error"),
@@ -236,7 +239,10 @@ fn test_mcp_mode_get_service_status() {
     // Verify response
     if let Ok(response_str) = read_result {
         if !response_str.is_empty() {
-            assert!(response_str.contains("jsonrpc"), "Expected JSON-RPC response");
+            assert!(
+                response_str.contains("jsonrpc"),
+                "Expected JSON-RPC response"
+            );
             assert!(
                 response_str.contains("result") || response_str.contains("error"),
                 "Response: {}",

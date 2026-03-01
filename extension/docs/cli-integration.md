@@ -76,18 +76,21 @@ dmn start --help
 Show the current status of all configured services.
 
 ```bash
-dmn status
+dmn status [service]
 ```
 
 **Example Output:**
 ```
 Service Status:
 --------------------------------------------------
+Controller: extension-daemon
 database                       Running
 backend-api                    Running  
 frontend                       Running
 worker                         Not Started
 ```
+
+If no extension daemon is running, CLI falls back to local supervisor mode and the header shows `Supervisor: running/not running`.
 
 **Status Values:**
 - `Not Started` - Service hasn't been started yet
@@ -100,53 +103,64 @@ worker                         Not Started
 
 ### `dmn start`
 
-Start all services defined in your `dmn.json` configuration.
+Start services from your `dmn.json` configuration.
 
 ```bash
-dmn start
+dmn start [service]
 ```
 
 **Behavior:**
 - Reads `dmn.json` from the current directory
-- Starts services in dependency order
-- Waits for each service to become ready before starting dependents
-- Returns when all services are running
+- Routes to the active extension daemon first (same runtime as UI/Command Palette)
+- Starts all services (or a single service + dependencies)
+- Falls back to local supervisor mode only when no extension daemon is available
 
 **Example:**
 ```bash
 $ dmn start
-Starting database...
-Database is ready
-Starting backend-api...
-Backend-api is ready
-Starting frontend...
-Frontend is ready
-All services started successfully
+Start requested via extension daemon.
+
+$ dmn start frontend
+Service 'frontend' start requested via extension daemon.
 ```
 
 ---
 
 ### `dmn stop`
 
-Stop all running services gracefully.
+Stop all running services, or stop a single service.
 
 ```bash
-dmn stop
+dmn stop [service]
 ```
 
 **Behavior:**
-- Sends termination signals to all running services
-- Waits for graceful shutdown
-- Forces termination if services don't respond
+- `dmn stop <service>` sends a targeted stop request to the active controller
+- `dmn stop` stops all running services
+- Controller preference: extension daemon first, local supervisor fallback
 
 **Example:**
 ```bash
+$ dmn stop frontend
+Service 'frontend' stop requested via extension daemon.
+
 $ dmn stop
-Stopping frontend...
-Stopping backend-api...
-Stopping database...
-All services stopped
+Stop requested via extension daemon.
 ```
+
+---
+
+### `dmn restart`
+
+Restart a single managed service.
+
+```bash
+dmn restart <service>
+```
+
+**Behavior:**
+- Stops and starts the target service via the active controller
+- Preserves dependency-aware orchestration behavior
 
 ---
 
@@ -172,13 +186,14 @@ dmn daemon
 Run OpenDaemon in MCP (Model Context Protocol) server mode for AI agent integration.
 
 ```bash
-dmn mcp
+dmn mcp [--check]
 ```
 
 **Purpose:**
 - Exposes service logs and status to AI coding assistants
 - Enables AI agents to debug issues by reading runtime data
 - Provides tools: `read_logs`, `get_service_status`, `list_services`
+- Supports `dmn mcp --check` to validate MCP config and exit
 
 **When to use:**
 - AI assistant integration (Kiro, Cursor, Claude Desktop)
@@ -196,8 +211,10 @@ All commands support the `--config` option to specify a custom configuration fil
 ```bash
 # Use custom config file
 dmn start --config ./config/development.json
+dmn start frontend --config ./config/development.json
 dmn status --config /path/to/services.json
 dmn stop -c ../shared/dmn.json
+dmn restart backend-api -c ../shared/dmn.json
 ```
 
 **Default:** If not specified, `dmn.json` in the current directory is used.

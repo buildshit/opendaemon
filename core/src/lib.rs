@@ -19,4 +19,6 @@ pub use mcp_server::{DmnMcpServer, McpToolCall, McpToolResult};
 pub use orchestrator::{Orchestrator, OrchestratorEvent};
 pub use process::{LogLineEvent, ManagedProcess, ProcessManager, ServiceStatus};
 pub use ready::ReadyWatcher;
-pub use rpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LogLinesParam, RpcRequest, RpcServer};
+pub use rpc::{
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LogLinesParam, RpcRequest, RpcServer,
+};
