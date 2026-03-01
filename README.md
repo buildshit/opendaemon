@@ -350,7 +350,7 @@ Path to an environment file to load for this service.
 
 ## AI Integration (MCP)
 
-OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding assistants to read service logs and help debug issues.
+OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding assistants to inspect logs/status **and** control services.
 
 ### Quick Setup
 
@@ -359,9 +359,17 @@ OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding
    dmn mcp
    ```
 
-2. **Configure your AI assistant** (Kiro, Cursor, Claude Desktop)
+2. **Configure your AI assistant**
+   - OpenDaemon does **not** auto-register or auto-write MCP configs.
+   - Copy/paste a manual config snippet from `docs/MCP_QUICK_START.md`.
+   - Use an explicit config path in args: `["mcp", "--config", "<absolute-path-to-dmn.json>"]`.
 
 3. **Ask your AI:** "What services are configured in OpenDaemon?"
+
+4. **Validate service control flow:**
+   - "Please use the OpenDaemon MCP tool to start the frontend service"
+   - "Great it works, please restart the frontend"
+   - Confirm `frontend` returns to `running` after restart
 
 **📚 Guides:**
 - **[MCP Quick Start](docs/MCP_QUICK_START.md)** - Get started in 5 minutes
@@ -372,6 +380,8 @@ OpenDaemon includes an MCP (Model Context Protocol) server that allows AI coding
 With MCP integration, your AI assistant can:
 - **Debug issues** by reading actual service logs
 - **Check service status** and dependencies  
+- **Start/stop/restart services** during debugging workflows
+- **Watch live logs** until patterns match (for token-efficient monitoring)
 - **Analyze error patterns** across multiple services
 - **Suggest fixes** based on real runtime data
 

@@ -34,7 +34,14 @@ Print this page or keep it open while setting up MCP integration.
 
 ## Step 2: Configure Your AI Assistant
 
-### Option A: Kiro (VS Code)
+### Option A: Manual MCP config (recommended for all IDEs)
+
+- [ ] **Choose your MCP config file** (`.cursor/mcp.json`, `.kiro/settings/mcp.json`, `.antigravity/mcp.json`, etc.)
+- [ ] **Copy a full snippet from** [MCP_QUICK_START.md](MCP_QUICK_START.md)
+- [ ] **Use `--config` with an absolute `dmn.json` path**
+- [ ] **Restart or reload your IDE after saving**
+
+### Option B: Kiro (VS Code)
 
 - [ ] **Create config directory:**
   ```bash
@@ -47,11 +54,12 @@ Print this page or keep it open while setting up MCP integration.
     "mcpServers": {
       "opendaemon": {
         "command": "dmn",
-        "args": ["mcp"],
+        "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
         "disabled": false,
         "autoApprove": [
           "list_services",
-          "get_service_status"
+          "get_service_status",
+          "watch_logs"
         ]
       }
     }
@@ -63,7 +71,7 @@ Print this page or keep it open while setting up MCP integration.
   - Type "Developer: Reload Window"
   - Press Enter
 
-### Option B: Cursor
+### Option C: Cursor
 
 - [ ] **Create `.cursor/mcp.json` in your project:**
   ```json
@@ -71,7 +79,7 @@ Print this page or keep it open while setting up MCP integration.
     "mcpServers": {
       "opendaemon": {
         "command": "dmn",
-        "args": ["mcp"],
+        "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
         "env": {}
       }
     }
@@ -80,7 +88,7 @@ Print this page or keep it open while setting up MCP integration.
 
 - [ ] **Restart Cursor**
 
-### Option C: Claude Desktop
+### Option D: Claude Desktop
 
 - [ ] **Find config file location:**
   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -92,7 +100,7 @@ Print this page or keep it open while setting up MCP integration.
     "mcpServers": {
       "opendaemon": {
         "command": "dmn",
-        "args": ["mcp"]
+        "args": ["mcp", "--config", "/absolute/path/to/dmn.json"]
       }
     }
   }
@@ -112,7 +120,7 @@ Print this page or keep it open while setting up MCP integration.
   ```
   "What's the status of my services?"
   ```
-  ✅ Should show service statuses (NotStarted, Running, etc.)
+  ✅ Should show service statuses (`not_started`, `running`, `failed (...)`, etc.)
 
 - [ ] **Log test - Ask your AI:**
   ```
@@ -120,11 +128,25 @@ Print this page or keep it open while setting up MCP integration.
   ```
   ✅ Should ask for permission, then show logs or "no logs available"
 
+- [ ] **Start test - Ask your AI:**
+  ```
+  "Please use the OpenDaemon MCP tool to start the frontend service"
+  ```
+  ✅ Should call `start_service` for `frontend` and then show `frontend` as `starting` or `running`
+
+- [ ] **Restart test - Ask your AI:**
+  ```
+  "Great it works, please restart the frontend"
+  ```
+  ✅ Should call `restart_service` for `frontend`, then show `starting` and finally `running`
+
 ## Step 4: Verify Everything Works
 
 - [ ] **AI can list services** ✅
 - [ ] **AI can check service status** ✅  
 - [ ] **AI can read logs (with permission)** ✅
+- [ ] **AI can start/stop/restart services** ✅
+- [ ] **AI can start and restart `frontend` on demand** ✅
 - [ ] **No error messages in AI assistant** ✅
 
 ## Troubleshooting
@@ -142,7 +164,12 @@ If something doesn't work, check these common issues:
 
 ### ❌ "Failed to load dmn.json"
 
-**Fix:** Make sure you're in the right directory with dmn.json
+**Fix:** Use an absolute config path in args:
+```json
+{
+  "args": ["mcp", "--config", "/absolute/path/to/dmn.json"]
+}
+```
 
 ### ❌ "MCP server not available"
 
@@ -172,7 +199,8 @@ If something doesn't work, check these common issues:
 {
   "autoApprove": [
     "list_services",
-    "get_service_status"
+    "get_service_status",
+    "watch_logs"
   ]
 }
 ```

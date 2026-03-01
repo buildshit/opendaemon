@@ -8,7 +8,7 @@ Orchestrate local development services with declarative configuration.
 - **Dependency-Aware Startup**: Services start in the correct order based on dependencies
 - **Real-Time Log Streaming**: View logs from any service in the output panel
 - **Service Status Monitoring**: Visual tree view showing service status with icons
-- **AI Agent Integration**: MCP server for AI-powered log analysis
+- **AI Agent Integration**: Works with MCP clients through manual `mcp.json` configuration
 - **Configuration Wizard**: Automatically detect and suggest services from package.json and docker-compose.yml
 - **File Watching**: Automatically reload when dmn.json changes
 
@@ -38,6 +38,8 @@ extension/
 3. Use the OpenDaemon sidebar to start/stop services
 4. View logs in the output panel
 5. Right-click services for context menu actions
+6. Configure MCP manually using the snippets in `../docs/MCP_QUICK_START.md`
+7. Validate MCP control flow by asking your AI to start and restart `frontend`
 
 ## Configuration Example
 
@@ -92,6 +94,7 @@ npm run watch
 - `OpenDaemon: Stop Service` - Stop a specific service
 - `OpenDaemon: Restart Service` - Restart a specific service
 - `OpenDaemon: Show Logs` - Show logs for a service
+- `OpenDaemon: Show CLI Logs` - Open CLI integration/debug output
 
 ## Requirements
 

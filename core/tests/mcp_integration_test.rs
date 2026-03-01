@@ -97,7 +97,7 @@ fn test_mcp_server_tools_list() {
     let tools = response["result"]["tools"]
         .as_array()
         .expect("tools should be an array");
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 7);
 
     let tool_names: Vec<String> = tools
         .iter()
@@ -105,8 +105,12 @@ fn test_mcp_server_tools_list() {
         .collect();
 
     assert!(tool_names.contains(&"read_logs".to_string()));
+    assert!(tool_names.contains(&"watch_logs".to_string()));
     assert!(tool_names.contains(&"get_service_status".to_string()));
     assert!(tool_names.contains(&"list_services".to_string()));
+    assert!(tool_names.contains(&"start_service".to_string()));
+    assert!(tool_names.contains(&"stop_service".to_string()));
+    assert!(tool_names.contains(&"restart_service".to_string()));
 
     // Clean up
     child.kill().expect("Failed to kill child process");
@@ -155,7 +159,7 @@ fn test_mcp_server_list_services() {
     assert!(response["result"].is_object());
 
     let result = &response["result"];
-    assert_eq!(result["type"], "success");
+    assert_eq!(result["isError"], false);
 
     let content = result["content"]
         .as_array()
@@ -214,7 +218,7 @@ fn test_mcp_server_get_service_status() {
     assert!(response["result"].is_object());
 
     let result = &response["result"];
-    assert_eq!(result["type"], "success");
+    assert_eq!(result["isError"], false);
 
     let content = result["content"]
         .as_array()
@@ -225,7 +229,7 @@ fn test_mcp_server_get_service_status() {
     let text = content[0]["text"].as_str().unwrap();
     assert!(text.contains("test_service"));
     assert!(text.contains("database"));
-    assert!(text.contains("NotStarted"));
+    assert!(text.contains("not_started"));
 
     // Clean up
     child.kill().expect("Failed to kill child process");
@@ -277,7 +281,7 @@ fn test_mcp_server_read_logs() {
     assert!(response["result"].is_object());
 
     let result = &response["result"];
-    assert_eq!(result["type"], "success");
+    assert_eq!(result["isError"], false);
 
     let content = result["content"]
         .as_array()
@@ -334,10 +338,13 @@ fn test_mcp_server_invalid_service() {
     assert_eq!(response["id"], 5);
 
     let result = &response["result"];
-    assert_eq!(result["type"], "error");
-
-    let error = result["error"].as_str().unwrap();
-    assert!(error.contains("Service not found"));
+    assert_eq!(result["isError"], true);
+    let content = result["content"]
+        .as_array()
+        .expect("content should be an array");
+    assert!(!content.is_empty());
+    let error_text = content[0]["text"].as_str().unwrap_or("");
+    assert!(error_text.contains("Service not found"));
 
     // Clean up
     child.kill().expect("Failed to kill child process");
@@ -465,7 +472,7 @@ async fn test_mcp_server_stdio_mock() {
 
     let result = response.result.unwrap();
     let tools = result["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 7);
 }
 
 #[tokio::test]

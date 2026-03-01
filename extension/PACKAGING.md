@@ -209,6 +209,14 @@ npx ovsx publish dist/opendaemon-*.vsix -p <token>
 2. Verify binaries exist in `dist/`
 3. Run `./scripts/bundle-extension.sh` to copy them to `extension/bin/`
 
+### Windows File Lock During Build
+
+**Problem**: `Access is denied` while rebuilding `target/build-current/.../dmn.exe`.
+
+**Current behavior**:
+- `scripts/build-current.ps1` now automatically retries with an isolated fallback target directory when the primary target is locked.
+- This allows package/install workflows to complete even when a previous process still holds the old executable.
+
 ### TypeScript Compilation Errors
 
 **Problem**: `npm run compile` fails.

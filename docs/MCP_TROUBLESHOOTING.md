@@ -14,8 +14,8 @@ dmn --version
 ls dmn.json
 
 # 3. Test MCP server starts
-dmn mcp
-# Should show: "Starting MCP server mode with config: "dmn.json""
+dmn mcp --config /absolute/path/to/dmn.json
+# Should show: "Starting MCP server mode with config: "/absolute/path/to/dmn.json""
 # Press Ctrl+C to stop
 ```
 
@@ -33,7 +33,7 @@ dmn mcp
   "mcpServers": {
     "opendaemon": {
       "command": "/full/path/to/dmn",
-      "args": ["mcp"]
+      "args": ["mcp", "--config", "/full/path/to/dmn.json"]
     }
   }
 }
@@ -60,9 +60,9 @@ export PATH="/path/to/opendaemon:$PATH"
    ls dmn.json
    ```
 
-2. **Check file location:**
-   - MCP server looks for `dmn.json` in the current working directory
-   - Make sure you're running from your project root
+2. **Use explicit config path:**
+   - Always pass `--config` with an absolute path to `dmn.json`
+   - This avoids IDE working-directory differences
 
 3. **Check file syntax:**
    ```bash
@@ -90,13 +90,13 @@ export PATH="/path/to/opendaemon:$PATH"
 
 1. **Test server manually:**
    ```bash
-   dmn mcp
+   dmn mcp --config /absolute/path/to/dmn.json
    # Should start without errors
    ```
 
-2. **Check working directory:**
-   - AI assistant starts MCP server from your project directory
-   - Make sure `dmn.json` is in the right place
+2. **Use explicit `--config`:**
+   - Do not rely on current working directory
+   - Pass an absolute `dmn.json` path in your MCP args
 
 3. **Restart AI assistant:**
    - Kiro: Reload VS Code window
@@ -109,12 +109,24 @@ export PATH="/path/to/opendaemon:$PATH"
      "mcpServers": {
        "opendaemon": {
          "command": "dmn",
-         "args": ["mcp"],
+         "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
          "disabled": false
        }
      }
    }
    ```
+
+5. **Verify you are using a current binary build:**
+   ```bash
+   /path/to/dmn mcp --help
+   ```
+   - Recent builds show a `--check` option.
+   - If your binary does not, update the binary path in your MCP config (for local source builds, prefer the newest build output).
+   - If `target/build-current/release/dmn.exe` is locked and cannot be rebuilt, point MCP to `dist/dmn-win32-x64.exe` or close the locking IDE process and rebuild.
+
+6. **Ensure MCP and extension daemon target the same `dmn.json`:**
+   - MCP now reuses the active extension daemon when config paths match.
+   - If MCP output and extension UI status disagree, confirm the MCP `--config` path is the same file used by the extension workspace.
 
 ### 4. "No services found" or Empty Results
 
@@ -170,7 +182,7 @@ export PATH="/path/to/opendaemon:$PATH"
 3. **Check server response:**
    ```bash
    # Test with a simple MCP request
-   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | dmn mcp
+   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | dmn mcp --config /absolute/path/to/dmn.json
    ```
 
 ### 6. "Invalid input: expected object, received undefined"
@@ -198,7 +210,7 @@ export PATH="/path/to/opendaemon:$PATH"
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "autoApprove": [
         "list_services",
         "get_service_status"
@@ -211,9 +223,11 @@ export PATH="/path/to/opendaemon:$PATH"
 **Safe to auto-approve:**
 - `list_services` - Only lists service names
 - `get_service_status` - Only shows service status
+- `watch_logs` - Read-only live log watching/filtering
 
 **Requires permission:**
 - `read_logs` - Reads actual log content
+- `start_service`, `stop_service`, `restart_service` - Changes service runtime state
 
 ### 8. "Service 'X' not found"
 
@@ -235,6 +249,53 @@ export PATH="/path/to/opendaemon:$PATH"
    ```
    "What services are configured?"
    ```
+
+### 9. Need Detailed MCP Tool Call Tracing
+
+**Problem:** You need to inspect MCP request/tool-call flow end-to-end.
+
+**Solutions:**
+
+1. **Server-side runtime trace:**
+   - Start MCP manually with stderr visible:
+     ```bash
+     dmn mcp --config /absolute/path/to/dmn.json 2> mcp-debug.log
+     ```
+   - Recent builds emit structured stderr events for:
+     - request dispatch (`initialize`, `tools/list`, `tools/call`)
+     - tool execution start/finish, argument summaries, elapsed time
+     - invalid params / unknown method errors
+
+2. **Correlate with client logs:**
+   - Use your IDE/client MCP output panel for startup errors
+   - Use MCP server stderr for request/tool-call execution traces
+
+### 10. `start_service` says "Start requested" but nothing changes
+
+**Problem:** MCP reports a successful start request, but service state appears unchanged.
+
+**What this usually means:**
+- The service is already running, so status remains `running`
+- You are reading old log lines (no new startup event yet)
+- MCP and extension daemon are pointed at different `dmn.json` files
+
+**Checks:**
+
+1. **Confirm current state first:**
+   - Run `get_service_status`
+   - If `frontend` is already `running`, `start_service` is effectively idempotent
+
+2. **Force a visible transition:**
+   - Call `restart_service` for the same service
+   - Verify status moves through `starting` to `running`
+
+3. **Verify fresh logs after restart:**
+   - Call `read_logs(service: "frontend", lines: 20)`
+   - Confirm recent timestamps and startup lines
+
+4. **Confirm config-path alignment:**
+   - Ensure MCP args include `--config /absolute/path/to/dmn.json`
+   - Ensure this is the same workspace config used by the extension daemon
 
 ## Platform-Specific Issues
 
@@ -278,7 +339,7 @@ import sys
 def test_mcp():
     # Start MCP server
     process = subprocess.Popen(
-        ["dmn", "mcp"],
+        ["dmn", "mcp", "--config", "/absolute/path/to/dmn.json"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -321,10 +382,10 @@ When working correctly, you should see:
      "jsonrpc": "2.0",
      "id": 1,
      "result": {
-       "protocolVersion": "2024-11-05",
+       "protocolVersion": "2025-06-18",
        "serverInfo": {
          "name": "opendaemon",
-         "version": "1.0.0"
+         "version": "0.1.0"
        }
      }
    }
@@ -334,9 +395,13 @@ When working correctly, you should see:
    ```json
    {
      "tools": [
-       {"name": "read_logs"},
+       {"name": "list_services"},
        {"name": "get_service_status"},
-       {"name": "list_services"}
+       {"name": "read_logs"},
+       {"name": "watch_logs"},
+       {"name": "start_service"},
+       {"name": "stop_service"},
+       {"name": "restart_service"}
      ]
    }
    ```
@@ -347,7 +412,8 @@ If you're still having issues:
 
 1. **Check the logs:**
    - Look for error messages in your AI assistant's output
-   - Check VS Code's Output panel (OpenDaemon channel)
+   - Check VS Code's Output panel:
+     - `OpenDaemon CLI` (runtime daemon/CLI diagnostics)
 
 2. **Create a minimal test case:**
    - Use the simplest possible dmn.json
@@ -374,9 +440,9 @@ If you're still having issues:
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "disabled": false,
-      "autoApprove": ["list_services", "get_service_status"]
+      "autoApprove": ["list_services", "get_service_status", "watch_logs"]
     }
   }
 }
@@ -388,7 +454,7 @@ If you're still having issues:
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "env": {}
     }
   }
@@ -401,7 +467,7 @@ If you're still having issues:
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"]
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"]
     }
   }
 }
@@ -412,11 +478,11 @@ If you're still having issues:
 ```bash
 # Basic functionality
 dmn --version
-dmn mcp
+dmn mcp --config /absolute/path/to/dmn.json
 
 # Service listing
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_services","arguments":{}}}' | dmn mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_services","arguments":{}}}' | dmn mcp --config /absolute/path/to/dmn.json
 
 # Status check
-echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_service_status","arguments":{}}}' | dmn mcp
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_service_status","arguments":{}}}' | dmn mcp --config /absolute/path/to/dmn.json
 ```

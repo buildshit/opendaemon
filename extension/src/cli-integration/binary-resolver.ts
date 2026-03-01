@@ -53,10 +53,10 @@ function resolveLocalBinary(platform: PlatformInfo, workspaceRoot?: string): Bin
 
   const executableName = platform.os === 'win32' ? 'dmn.exe' : 'dmn';
   const candidates = [
-    path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
     path.join(workspaceRoot, 'target', 'release', executableName),
-    path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName),
-    path.join(workspaceRoot, 'target', 'debug', executableName)
+    path.join(workspaceRoot, 'target', 'debug', executableName),
+    path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
+    path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName)
   ];
   const selected = pickNewestBinary(candidates);
   if (selected) {

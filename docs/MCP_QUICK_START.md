@@ -46,73 +46,116 @@ The server is now waiting for MCP requests. Press `Ctrl+C` to stop it.
 
 ## Step 3: Configure Your AI Assistant
 
-Choose your AI assistant and follow the setup:
+OpenDaemon now uses **manual MCP configuration only**.  
+Choose the file your client reads (`.cursor/mcp.json`, `.kiro/settings/mcp.json`, `.antigravity/mcp.json`, etc.) and paste one of these snippets.
 
-### Option A: Kiro (VS Code)
+> Always include `--config` with an absolute `dmn.json` path.  
+> This avoids failures when IDEs launch MCP servers from a non-workspace working directory.
+> If you build from source and have multiple binaries, point to your newest build output.
+> With matching config paths, MCP calls share the active OpenDaemon extension daemon runtime.
 
-1. **Create the config directory:**
-   ```bash
-   mkdir -p .kiro/settings
-   ```
+### Option A: Cursor / Kiro / Antigravity (`mcpServers`)
 
-2. **Create `.kiro/settings/mcp.json`:**
-   ```json
-   {
-     "mcpServers": {
-       "opendaemon": {
-         "command": "dmn",
-         "args": ["mcp"],
-         "disabled": false,
-         "autoApprove": [
-           "list_services",
-           "get_service_status"
-         ]
-       }
-     }
-   }
-   ```
+#### Windows
 
-3. **Reload VS Code:**
-   - Press `Ctrl+Shift+P`
-   - Type "Developer: Reload Window"
-   - Press Enter
+```json
+{
+  "mcpServers": {
+    "opendaemon": {
+      "command": "C:\\path\\to\\dmn.exe",
+      "args": [
+        "mcp",
+        "--config",
+        "C:\\path\\to\\dmn.json"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "list_services",
+        "get_service_status"
+      ],
+      "disabledTools": []
+    }
+  }
+}
+```
 
-### Option B: Cursor
+#### macOS
 
-1. **Create `.cursor/mcp.json` in your project:**
-   ```json
-   {
-     "mcpServers": {
-       "opendaemon": {
-         "command": "dmn",
-         "args": ["mcp"],
-         "env": {}
-       }
-     }
-   }
-   ```
+```json
+{
+  "mcpServers": {
+    "opendaemon": {
+      "command": "/absolute/path/to/dmn",
+      "args": [
+        "mcp",
+        "--config",
+        "/absolute/path/to/dmn.json"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "list_services",
+        "get_service_status"
+      ],
+      "disabledTools": []
+    }
+  }
+}
+```
 
-2. **Restart Cursor**
+#### Linux
+
+```json
+{
+  "mcpServers": {
+    "opendaemon": {
+      "command": "/absolute/path/to/dmn",
+      "args": [
+        "mcp",
+        "--config",
+        "/absolute/path/to/dmn.json"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "list_services",
+        "get_service_status"
+      ],
+      "disabledTools": []
+    }
+  }
+}
+```
+
+### Option B: VS Code `mcp.json` format (`servers`)
+
+Use this in `.vscode/mcp.json` when your VS Code build expects `servers` format:
+
+```json
+{
+  "servers": {
+    "opendaemon": {
+      "type": "stdio",
+      "command": "C:\\path\\to\\dmn.exe",
+      "args": [
+        "mcp",
+        "--config",
+        "C:\\path\\to\\dmn.json"
+      ],
+      "env": {}
+    }
+  }
+}
+```
 
 ### Option C: Claude Desktop
 
-1. **Find your config file:**
+1. Edit your Claude Desktop config file:
    - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%/Claude/claude_desktop_config.json`
-
-2. **Add OpenDaemon to the config:**
-   ```json
-   {
-     "mcpServers": {
-       "opendaemon": {
-         "command": "dmn",
-         "args": ["mcp"]
-       }
-     }
-   }
-   ```
-
-3. **Restart Claude Desktop**
+2. Paste the same `mcpServers` snippet from **Option A**.
+3. Restart Claude Desktop.
 
 ## Step 4: Test the Integration
 
@@ -130,7 +173,7 @@ Ask your AI assistant these questions:
 "What's the status of my services?"
 ```
 
-**Expected response:** Your AI should show service statuses (NotStarted, Running, Failed, etc.)
+**Expected response:** Your AI should show service statuses (`not_started`, `running`, `failed (...)`, etc.)
 
 ### Log Reading (requires permission)
 ```
@@ -138,6 +181,29 @@ Ask your AI assistant these questions:
 ```
 
 **Expected response:** Your AI should ask for permission, then show logs (or say no logs if services aren't started)
+
+### Service Control Verification (Start + Restart)
+Use this exact workflow to confirm mutating tools are wired correctly:
+
+1. Ask your AI:
+   ```
+   "Please use the OpenDaemon MCP tool to start the frontend service"
+   ```
+2. Expected MCP behavior:
+   - `list_services` includes `frontend`
+   - `start_service` returns "Start requested for 'frontend' (dependencies included)."
+   - `get_service_status` shows `frontend` as `starting` or `running`
+   - `read_logs` for `frontend` shows recent startup/runtime output
+3. Ask your AI:
+   ```
+   "Great it works, please restart the frontend"
+   ```
+4. Expected MCP behavior:
+   - `restart_service` is called with `{ "service": "frontend" }`
+   - `get_service_status` returns `frontend` as `starting`, then `running`
+   - Dependent services (for example `backend-api`, `database`) remain healthy
+
+If this sequence succeeds, your MCP client is controlling the active OpenDaemon runtime correctly.
 
 ## Step 5: Start Using It!
 
@@ -151,6 +217,10 @@ Now you can ask your AI assistant to help with development tasks:
 ### Service Management
 ```
 "Are all my services running properly?"
+```
+
+```
+"Start the backend-api service, then watch logs until it prints 'running'"
 ```
 
 ### Log Analysis
@@ -179,15 +249,14 @@ Now you can ask your AI assistant to help with development tasks:
      "mcpServers": {
        "opendaemon": {
          "command": "/full/path/to/dmn",
-         "args": ["mcp"]
+         "args": ["mcp", "--config", "/full/path/to/dmn.json"]
        }
      }
    }
    ```
-
-3. **Check your workspace:**
-   - Make sure you're in a directory with `dmn.json`
-   - The MCP server needs this file to work
+3. **Prefer explicit config path:**
+   - Always pass `--config` with an absolute path to `dmn.json`
+   - This avoids working-directory issues in IDE MCP runners
 
 ### "No services found"
 
@@ -222,10 +291,11 @@ This is normal for the `read_logs` tool. To auto-approve safe tools, add them to
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "autoApprove": [
         "list_services",
-        "get_service_status"
+        "get_service_status",
+        "watch_logs"
       ]
     }
   }
@@ -235,9 +305,11 @@ This is normal for the `read_logs` tool. To auto-approve safe tools, add them to
 **Safe to auto-approve:**
 - `list_services` - Just lists service names
 - `get_service_status` - Just shows status
+- `watch_logs` - Read-only live log watch with filters
 
 **Requires permission:**
 - `read_logs` - Reads actual log data
+- `start_service` / `stop_service` / `restart_service` - Mutates runtime service state
 
 ## What Can Your AI Do Now?
 
@@ -252,6 +324,12 @@ With MCP integration, your AI assistant can:
 - Check which services are running
 - Identify failed or stuck services
 - Understand service dependencies
+
+### 🛠️ **Control Services**
+- Start a service with dependencies (`start_service`)
+- Stop a running service (`stop_service`)
+- Restart unhealthy services (`restart_service`)
+- Watch live logs with stop conditions (`watch_logs`)
 
 ### 🚀 **Development Workflow**
 - Help you understand startup issues

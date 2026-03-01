@@ -23,17 +23,20 @@ OpenDaemon includes a Model Context Protocol (MCP) server that allows AI coding 
 
 ## Overview
 
-The MCP server exposes three tools that AI agents can call:
+The MCP server exposes seven tools that AI agents can call:
 
-1. **read_logs** - Read log output from any service
-2. **get_service_status** - Get the current status of all services
-3. **list_services** - List all services defined in dmn.json
+1. **list_services** *(read-only)* - List all services in `dmn.json`
+2. **get_service_status** *(read-only)* - Get status for all services
+3. **read_logs** *(read-only)* - Read buffered logs from a service
+4. **watch_logs** *(read-only)* - Watch live logs with duration/pattern filters
+5. **start_service** - Start one service (and dependencies)
+6. **stop_service** - Stop one service
+7. **restart_service** - Restart one service
 
-These tools allow AI assistants like Cursor, GitHub Copilot, or Claude to:
-- Analyze error messages in service logs
-- Understand the state of your development environment
-- Suggest fixes based on actual runtime behavior
-- Help debug issues across multiple services
+This combination lets AI assistants both **observe** and **act**:
+- Observe: inspect current state and targeted logs without pulling unnecessary output
+- Act: start/stop/restart services directly from tool calls
+- Diagnose: watch for specific patterns and stop automatically once matched
 
 ## Quick Start
 
@@ -45,12 +48,21 @@ dmn mcp
 
 This starts OpenDaemon in MCP mode, which:
 - Reads your `dmn.json` configuration
-- Starts all services according to dependency order
 - Exposes MCP tools on stdio for AI agent communication
+- Waits for MCP tool requests
+- Reuses the active OpenDaemon extension daemon (when present for the same config) so MCP and the extension UI stay in sync
+
+> `dmn mcp` does **not** auto-start services.  
+> Use `start_service` from MCP (or CLI/extension actions) to launch services.
 
 ### 2. Configure Your AI Assistant
 
-#### Cursor
+#### Manual MCP config (all IDEs)
+
+OpenDaemon now relies on manual MCP client configuration.
+Use absolute paths and always include `--config` to avoid working-directory issues.
+
+#### Cursor / Kiro / Antigravity (`mcpServers`)
 
 Add to your Cursor settings (`.cursor/mcp.json`):
 
@@ -59,7 +71,7 @@ Add to your Cursor settings (`.cursor/mcp.json`):
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "env": {}
     }
   }
@@ -75,7 +87,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"]
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"]
     }
   }
 }
@@ -90,7 +102,7 @@ Add to `.kiro/settings/mcp.json`:
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "disabled": false,
       "autoApprove": ["list_services", "get_service_status"],
       "disabledTools": []
@@ -104,113 +116,16 @@ Add to `.kiro/settings/mcp.json`:
 Ask your AI assistant:
 - "What services are running?"
 - "Show me the last 50 lines of logs from the backend service"
-- "Why is the frontend service failing?"
+- "Start backend-api and watch logs until it prints 'Server ready'"
+- "Restart frontend and monitor stderr for 10 seconds"
 
 ## Available Tools
 
-### read_logs
-
-Read log output from a specific service.
-
-**Parameters:**
-
-```typescript
-{
-  service: string;      // Name of the service (must exist in dmn.json)
-  lines: number | "all"; // Number of lines to return, or "all"
-}
-```
-
-**Returns:**
-
-```typescript
-{
-  service: string;
-  logs: string[];  // Array of log lines
-}
-```
-
-**Example Request:**
-
-```json
-{
-  "name": "read_logs",
-  "arguments": {
-    "service": "backend",
-    "lines": 100
-  }
-}
-```
-
-**Example Response:**
-
-```json
-{
-  "service": "backend",
-  "logs": [
-    "[2026-01-20 10:15:23] Server starting...",
-    "[2026-01-20 10:15:24] Connected to database",
-    "[2026-01-20 10:15:25] Listening on port 3000",
-    "..."
-  ]
-}
-```
-
-**Use Cases:**
-- Debugging errors: "Show me the backend logs"
-- Analyzing startup: "What happened when the database started?"
-- Finding patterns: "Are there any errors in the frontend logs?"
-
-### get_service_status
-
-Get the current status of all services.
-
-**Parameters:**
-
-```typescript
-{} // No parameters required
-```
-
-**Returns:**
-
-```typescript
-{
-  services: {
-    [serviceName: string]: "NotStarted" | "Starting" | "Running" | "Stopped" | "Failed"
-  }
-}
-```
-
-**Example Request:**
-
-```json
-{
-  "name": "get_service_status",
-  "arguments": {}
-}
-```
-
-**Example Response:**
-
-```json
-{
-  "services": {
-    "database": "Running",
-    "backend": "Running",
-    "frontend": "Failed",
-    "worker": "Starting"
-  }
-}
-```
-
-**Use Cases:**
-- Environment overview: "What's the status of my services?"
-- Dependency checking: "Is the database running?"
-- Failure detection: "Which services have failed?"
+All tool calls return MCP `content` + `isError` responses.
 
 ### list_services
 
-List all services defined in the dmn.json configuration.
+List all services defined in the `dmn.json` configuration.
 
 **Parameters:**
 
@@ -218,15 +133,7 @@ List all services defined in the dmn.json configuration.
 {} // No parameters required
 ```
 
-**Returns:**
-
-```typescript
-{
-  services: string[]  // Array of service names
-}
-```
-
-**Example Request:**
+**Example request:**
 
 ```json
 {
@@ -235,24 +142,102 @@ List all services defined in the dmn.json configuration.
 }
 ```
 
-**Example Response:**
+### get_service_status
 
-```json
+Get the current status of all configured services.
+
+**Parameters:**
+
+```typescript
+{} // No parameters required
+```
+
+**Status values:**
+- `not_started`
+- `starting`
+- `running`
+- `stopped`
+- `failed (exit code: X)`
+
+### read_logs
+
+Read buffered log output from a specific service.
+
+**Parameters:**
+
+```typescript
 {
-  "services": [
-    "database",
-    "redis",
-    "backend",
-    "frontend",
-    "worker"
-  ]
+  service: string;                // Service name (required)
+  lines: number | "all";          // Required
+  contains?: string;              // Optional substring filter
+  caseSensitive?: boolean;        // Default false
+  stream?: "stdout" | "stderr" | "both"; // Default "both"
 }
 ```
 
-**Use Cases:**
-- Discovery: "What services are configured?"
-- Validation: "Is there a service called 'api'?"
-- Overview: "List all my services"
+### watch_logs
+
+Watch live logs with bounded runtime and token-aware filters.
+
+```typescript
+{
+  service: string;                 // Required
+  durationSeconds?: number;        // Required if untilPattern not set
+  untilPattern?: string;           // Regex. Required if durationSeconds not set
+  timeoutSeconds?: number;         // Optional hard timeout (0 disables)
+  pollIntervalMs?: number;         // Default 250, minimum 50
+  maxLines?: number;               // Default 200
+  includeExisting?: boolean;       // Default false
+  includePatterns?: string[];      // Regex include filters (any match)
+  excludePatterns?: string[];      // Regex exclude filters
+  caseSensitive?: boolean;         // Default false
+  stream?: "stdout" | "stderr" | "both"; // Default "both"
+}
+```
+
+**Example request (watch for readiness text):**
+
+```json
+{
+  "name": "watch_logs",
+  "arguments": {
+    "service": "backend",
+    "untilPattern": "Server ready",
+    "timeoutSeconds": 30,
+    "stream": "stdout"
+  }
+}
+```
+
+### start_service
+
+Start a service by name (including dependencies).
+
+```typescript
+{
+  service: string;
+}
+```
+
+### stop_service
+
+Stop a running service by name.
+
+```typescript
+{
+  service: string;
+}
+```
+
+### restart_service
+
+Restart a service by name.
+
+```typescript
+{
+  service: string;
+}
+```
 
 ## Configuration
 
@@ -268,7 +253,7 @@ export DMN_LOG_BUFFER_SIZE=5000
 export DMN_READY_TIMEOUT=120
 
 # Start MCP server
-dmn mcp
+dmn mcp --config /absolute/path/to/dmn.json
 ```
 
 ### Workspace Configuration
@@ -291,8 +276,8 @@ Ensure your `dmn.json` is properly configured:
 
 The MCP server will:
 1. Load this configuration
-2. Start all services
-3. Expose tools for AI agents to query
+2. Expose tools for AI agents to query and control services
+3. Wait for tool calls (services start only when explicitly requested)
 
 ## Usage Examples
 
@@ -348,6 +333,26 @@ The MCP server will:
 - worker: Stopped
 
 All critical services are running. The worker service is stopped but that appears intentional."
+
+### Example 5: Start and Restart Frontend (Validated Workflow)
+
+**User to AI:** "Please use the OpenDaemon MCP tool to start the frontend service"
+
+**AI uses tools:**
+1. `list_services()` - Verifies `frontend` exists
+2. `start_service(service: "frontend")` - Requests startup (with dependencies)
+3. `get_service_status()` - Confirms `frontend` is `starting` or `running`
+4. `read_logs(service: "frontend", lines: 20)` - Verifies runtime output
+
+**User to AI:** "Great it works, please restart the frontend"
+
+**AI uses tools:**
+1. `restart_service(service: "frontend")`
+2. `get_service_status()` - Confirms transition back to `running`
+
+**Expected response pattern:** "frontend restarted successfully and is running; dependency services (for example `backend-api` and `database`) remain running."
+
+This workflow is a practical end-to-end check that MCP mutating tools are wired correctly in your IDE.
 
 ## Authentication
 
@@ -473,7 +478,7 @@ import { MCPClient } from '@modelcontextprotocol/sdk';
 
 const client = new MCPClient({
   command: 'dmn',
-  args: ['mcp']
+  args: ['mcp', '--config', '/absolute/path/to/dmn.json']
 });
 
 await client.connect();
@@ -493,10 +498,10 @@ For automation or testing:
 
 ```bash
 # Start MCP server in background
-dmn mcp &
+dmn mcp --config /absolute/path/to/dmn.json &
 
 # Use MCP client to query
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_service_status","arguments":{}}}' | dmn mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_service_status","arguments":{}}}' | dmn mcp --config /absolute/path/to/dmn.json
 ```
 
 ### Integration with CI/CD
@@ -506,7 +511,7 @@ Use MCP tools in CI pipelines:
 ```yaml
 # .github/workflows/test.yml
 - name: Start services
-  run: dmn mcp &
+  run: dmn mcp --config /absolute/path/to/dmn.json &
   
 - name: Wait for services
   run: |
@@ -561,7 +566,7 @@ read_logs({ service: "backend", lines: 10000 })
 ```typescript
 // ✅ Good practice
 const status = await get_service_status();
-if (status.services.backend === "Running") {
+if (status.services.backend === "running") {
   const logs = await read_logs({ service: "backend", lines: 100 });
 }
 
@@ -578,17 +583,18 @@ In `.kiro/settings/mcp.json`:
   "mcpServers": {
     "opendaemon": {
       "command": "dmn",
-      "args": ["mcp"],
+      "args": ["mcp", "--config", "/absolute/path/to/dmn.json"],
       "autoApprove": [
         "list_services",
-        "get_service_status"
+        "get_service_status",
+        "watch_logs"
       ]
     }
   }
 }
 ```
 
-This allows AI to check status without prompting, while still requiring approval for reading logs.
+This allows AI to inspect status and run read-only log watches without prompting, while still requiring approval for mutating service-control tools.
 
 ## See Also
 
