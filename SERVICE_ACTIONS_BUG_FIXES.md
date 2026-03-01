@@ -595,3 +595,59 @@ Since we've already:
 - Success message shows immediately
 - No lingering progress notification
 - RPC still sent to daemon (in background)
+
+---
+
+## Round 6: Stop All UX Parity + Cross-IDE Packaging Reliability
+
+### Date: March 1, 2026
+
+### Issue Reported
+
+**Stop All still timed out in practice (especially database service)** even after extension-side Stop All logic was changed to per-service background stop calls.
+
+### Root Causes
+
+1. **Daemon RPC stdout writes were not serialized**: JSON-RPC notifications and responses could be written concurrently by different async tasks, which can interleave lines and produce parse/timeouts on the client.
+2. **Packaging/install flow could deploy stale code**:
+   - `install-extension.ps1` only installed into `code`, leaving forks (Cursor/Antigravity/Kiro) potentially on older extension builds.
+   - `package-extension-quick.ps1` only rebuilt the daemon binary when missing (not when stale), so new Rust daemon fixes might not be included in VSIX.
+   - `build-current.ps1` did not fail-fast on cargo build failure and could continue with old binaries.
+
+### Fixes Applied
+
+#### 1. Serialize daemon RPC writes (`core/src/rpc.rs`)
+
+- Introduced a shared stdout writer: `Arc<Mutex<tokio::io::Stdout>>`
+- Added `write_json_line(...)` helper and routed both request responses and event notifications through it.
+- Result: JSON lines are emitted atomically and in-order, eliminating response/notification interleaving corruption.
+
+#### 2. Make daemon rebuilds reliable (`scripts/build-current.ps1`)
+
+- Added explicit failure handling after `cargo build`.
+- Switched to an isolated target directory (`--target-dir target/build-current`) to avoid lock contention with running `dmn.exe`.
+- Copy step now force-updates `dist/dmn-win32-x64.exe`.
+
+#### 3. Ensure quick package includes fresh daemon (`scripts/package-extension-quick.ps1`)
+
+- Added stale-check logic: rebuild daemon when `core/src` or Cargo files are newer than `extension/bin/dmn-win32-x64.exe`.
+- Force-copy rebuilt binary into `extension/bin`.
+
+#### 4. Install to all detected VS Code-family editors (`scripts/install-extension.ps1`)
+
+- Installer now targets detected CLIs from: `code`, `cursor`, `antigravity`, `kiro`.
+- Prevents editor-specific stale extension installs during cross-IDE testing.
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `core/src/rpc.rs` | Serialize all JSON-RPC stdout writes via shared async mutex |
+| `scripts/build-current.ps1` | Fail-fast build checks + isolated target dir build |
+| `scripts/package-extension-quick.ps1` | Stale daemon detection and forced binary refresh |
+| `scripts/install-extension.ps1` | Multi-editor install support (`code/cursor/antigravity/kiro`) |
+
+### Validation Outcome
+
+- User confirmed Stop All now behaves as intended in real usage.
+- Stop behavior is now consistent with individual service stop UX.

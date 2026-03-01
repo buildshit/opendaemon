@@ -46,6 +46,7 @@ async function main() {
             launchArgs: [
                 testWorkspace,
                 '--disable-extensions',
+                '--disable-workspace-trust',
                 `--user-data-dir=${testUserDataDir}`,
                 `--extensions-dir=${testExtensionsDir}`
             ]

@@ -110,7 +110,10 @@ fn test_daemon_mode_json_rpc_get_status() {
     // Verify response
     if let Ok(response_str) = read_result {
         if !response_str.is_empty() {
-            assert!(response_str.contains("jsonrpc"), "Expected JSON-RPC response");
+            assert!(
+                response_str.contains("jsonrpc"),
+                "Expected JSON-RPC response"
+            );
             assert!(response_str.contains("result") || response_str.contains("error"));
         }
     }

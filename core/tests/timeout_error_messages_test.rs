@@ -109,7 +109,9 @@ async fn test_log_timeout_captures_recent_logs() {
     };
 
     let mut orchestrator = Orchestrator::new(config).unwrap();
-    let result = orchestrator.start_service_with_deps("logging_service").await;
+    let result = orchestrator
+        .start_service_with_deps("logging_service")
+        .await;
 
     // The service should start but fail the ready check
     assert!(result.is_ok());

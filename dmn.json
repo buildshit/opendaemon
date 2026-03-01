@@ -30,6 +30,14 @@
                 "pattern": "Frontend available",
                 "timeout_seconds": 10
             }
+        },
+        "extension": {
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-and-install-extension.ps1",
+            "ready_when": {
+                "type": "log_contains",
+                "pattern": "Workflow complete",
+                "timeout_seconds": 1200
+            }
         }
     }
 }

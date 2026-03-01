@@ -145,8 +145,8 @@ export class TerminalManager implements vscode.Disposable {
     private activityLogger: ActivityLogger | null;
     private stdinWriter: StdinWriter | null = null;
     private terminalCloseHandler: TerminalCloseHandler | null = null;
-    // Track terminals that we're closing programmatically to avoid triggering stop
-    private closingProgrammatically: Set<string> = new Set();
+    // Track terminal objects that we're closing programmatically to avoid triggering stop
+    private closingProgrammatically: Set<vscode.Terminal> = new Set();
 
     constructor(activityLogger?: ActivityLogger) {
         this.activityLogger = activityLogger || null;
@@ -154,6 +154,10 @@ export class TerminalManager implements vscode.Disposable {
         // Listen for terminal closures to clean up our map and optionally stop service
         this.disposables.push(
             vscode.window.onDidCloseTerminal((terminal) => {
+                // Determine close origin first so we can clean stale tracking even
+                // if the terminal has already been removed from our service maps.
+                const wasProgrammatic = this.closingProgrammatically.delete(terminal);
+
                 // Find the service name for this terminal
                 let foundServiceName: string | null = null;
                 for (const [serviceName, term] of this.terminals.entries()) {
@@ -165,8 +169,6 @@ export class TerminalManager implements vscode.Disposable {
                 
                 // If not found in our map, it might have already been cleaned up by closeTerminal
                 if (!foundServiceName) {
-                    // Check if it was a programmatic close that already cleaned up
-                    // (closingProgrammatically set would have been cleared if cleanup happened)
                     return;
                 }
                 
@@ -177,10 +179,7 @@ export class TerminalManager implements vscode.Disposable {
                 this.pseudoterminals.delete(serviceName);
                 
                 // Check if this was a user-initiated close (not programmatic)
-                const wasUserClose = !this.closingProgrammatically.has(serviceName);
-                this.closingProgrammatically.delete(serviceName);
-                
-                if (wasUserClose) {
+                if (!wasProgrammatic) {
                     // Log terminal closure by user
                     if (this.activityLogger) {
                         this.activityLogger.logTerminalAction(serviceName, 'Terminal closed by user - stopping service');
@@ -374,7 +373,7 @@ export class TerminalManager implements vscode.Disposable {
         
         if (terminal) {
             // Mark as closing programmatically so onDidCloseTerminal doesn't trigger stop
-            this.closingProgrammatically.add(serviceName);
+            this.closingProgrammatically.add(terminal);
             terminal.dispose();
             
             // Explicitly clean up maps (onDidCloseTerminal will also do this, but we do it
@@ -405,7 +404,7 @@ export class TerminalManager implements vscode.Disposable {
                 pty.terminate();
             }
             // Mark as closing programmatically so onDidCloseTerminal doesn't trigger stop
-            this.closingProgrammatically.add(serviceName);
+            this.closingProgrammatically.add(terminal);
             terminal.dispose();
             
             // Log each terminal closure
@@ -417,6 +416,8 @@ export class TerminalManager implements vscode.Disposable {
         // Clear maps explicitly (onDidCloseTerminal will also try but we do it here for safety)
         this.terminals.clear();
         this.pseudoterminals.clear();
+        // We already cleared service maps, so stale programmatic tracking is no longer useful.
+        this.closingProgrammatically.clear();
     }
 
     /**

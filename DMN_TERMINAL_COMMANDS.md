@@ -19,8 +19,19 @@ OpenDaemon (`dmn`) is a command-line tool for orchestrating local development se
 
 - **Daemon Mode**: JSON-RPC server for VS Code extension integration
 - **MCP Mode**: Model Context Protocol server for AI agent integration  
-- **Direct Commands**: Start, stop, and check status of services
+- **Direct Commands**: Start/stop/restart/status with shared daemon routing
 - **Interactive Mode**: Via VS Code extension UI
+
+## Confirmed Working Snapshot (2026-03-01)
+
+Validated from a real workspace terminal session:
+
+- `dmn start frontend` → `Service 'frontend' start requested via extension daemon.`
+- `dmn stop` → `Stop requested via extension daemon.`
+- `dmn start` → `Start requested via extension daemon.`
+- `dmn start database` → `Service 'database' start requested via extension daemon.`
+- `dmn restart database` → `Restart requested via extension daemon.`
+- `dmn status` → header shows `Controller: extension-daemon` and live service states
 
 ## Installation & Setup
 
@@ -63,6 +74,7 @@ dmn daemon [OPTIONS]
 
 **Options**:
 - `-c, --config <PATH>` - Path to dmn.json configuration file (default: "dmn.json")
+- `--check` - Validate MCP configuration and exit without starting stdio server
 
 **Example**:
 ```bash
@@ -103,6 +115,9 @@ dmn mcp
 
 # Start MCP server with custom config  
 dmn mcp --config ./dev/dmn.json
+
+# Validate MCP configuration only
+dmn mcp --check
 ```
 
 **When to use**:
@@ -128,16 +143,16 @@ dmn mcp --config ./dev/dmn.json
 
 ### `dmn start`
 
-Start all services defined in the configuration.
+Start all services or one service (with dependencies).
 
 ```bash
-dmn start [OPTIONS]
+dmn start [SERVICE] [OPTIONS]
 ```
 
 **Purpose**:
-- Starts all services in dependency order
-- Waits for each service to become ready before starting dependents
-- Runs services in the background
+- Prefer controlling the active extension daemon (same runtime as UI/Command Palette)
+- Start all services or one target service + dependencies
+- Fall back to local foreground supervisor mode when no daemon is available
 
 **Options**:
 - `-c, --config <PATH>` - Path to dmn.json configuration file (default: "dmn.json")
@@ -147,41 +162,48 @@ dmn start [OPTIONS]
 # Start all services
 dmn start
 
-# Start with custom config
-dmn start --config ./production/dmn.json
+# Start only frontend (auto-starts dependencies)
+dmn start frontend
+
+# Start all with custom config
+dmn start --config ./config/dev.json
 ```
 
 **Behavior**:
-- Reads `dmn.json` configuration
-- Builds dependency graph
-- Starts services in topological order
-- Waits for ready conditions before proceeding
-- Returns when all services are running
+- With an active extension daemon:
+  - Sends `startAll` / `startService` RPC to the daemon
+  - Returns immediately after request acceptance
+- Without an extension daemon:
+  - Starts local supervisor in current terminal
+  - Keeps running in foreground until `dmn stop`/Ctrl+C
+  - Streams realtime service activity logs to CLI output (`[timestamp] [service:stream] message`)
 
 **Exit Codes**:
-- `0` - All services started successfully
-- `1` - Configuration error or service startup failure
+- `0` - Start request accepted or supervisor started
+- `1` - Configuration error, invalid service, or control request failure
 
 ---
 
 ### `dmn stop`
 
-Stop all running services.
+Stop one service or stop all services.
 
 ```bash
-dmn stop [OPTIONS]
+dmn stop [SERVICE] [OPTIONS]
 ```
 
 **Purpose**:
-- Gracefully stops all services managed by dmn
-- Sends SIGTERM to processes, then SIGKILL if needed
-- Cleans up process resources
+- Stop a single managed service by name
+- Or stop all running services
 
 **Options**:
 - `-c, --config <PATH>` - Path to dmn.json configuration file (default: "dmn.json")
 
 **Example**:
 ```bash
+# Stop one service
+dmn stop frontend
+
 # Stop all services
 dmn stop
 
@@ -190,14 +212,41 @@ dmn stop --config ./dev/dmn.json
 ```
 
 **Behavior**:
-- Identifies running services from configuration
-- Sends termination signals to processes
-- Waits for graceful shutdown
-- Forces termination if processes don't respond
+- With an active extension daemon:
+  - Sends `stopService` / `stopAll` RPC to the daemon
+- Without an extension daemon:
+  - Uses local supervisor control path (`runtime-control.json`)
 
 **Exit Codes**:
-- `0` - All services stopped successfully
-- `1` - Configuration error or stop failure
+- `0` - Stop request processed successfully
+- `1` - Stop request failed or no matching active controller/config
+
+---
+
+### `dmn restart`
+
+Restart a single managed service.
+
+```bash
+dmn restart <SERVICE> [OPTIONS]
+```
+
+**Purpose**:
+- Stop and re-start one managed service
+- Preserve dependency-aware behavior from orchestrator logic
+
+**Options**:
+- `-c, --config <PATH>` - Path to dmn.json configuration file (default: "dmn.json")
+
+**Example**:
+```bash
+dmn restart backend-api
+dmn restart frontend --config ./config/dev.json
+```
+
+**Exit Codes**:
+- `0` - Restart request accepted
+- `1` - No active controller, invalid service, or request failure
 
 ---
 
@@ -206,12 +255,12 @@ dmn stop --config ./dev/dmn.json
 Show the current status of all services.
 
 ```bash
-dmn status [OPTIONS]
+dmn status [SERVICE] [OPTIONS]
 ```
 
 **Purpose**:
-- Display current state of all configured services
-- Show process status and basic information
+- Display current state from the active service controller
+- Show either all services or one specific service
 - Useful for debugging and monitoring
 
 **Options**:
@@ -222,6 +271,9 @@ dmn status [OPTIONS]
 # Check status of all services
 dmn status
 
+# Check one service
+dmn status backend-api
+
 # Check status with custom config
 dmn status --config ./staging/dmn.json
 ```
@@ -229,13 +281,15 @@ dmn status --config ./staging/dmn.json
 **Output Format**:
 ```
 Service Status:
---------------------------------------------------
+Controller: extension-daemon
 database                       Running
 backend-api                    Running  
 frontend                       Failed (exit code: 1)
 worker                         Not Started
 redis                          Stopped
 ```
+
+When no extension daemon is active, status falls back to the local supervisor output (`Supervisor: running/not running`).
 
 **Status Values**:
 - `Not Started` - Service hasn't been started yet
@@ -279,6 +333,9 @@ Display version information.
 ```bash
 dmn --version
 ```
+
+**Alias:** `dmn -V`  
+**Note:** lowercase `dmn -v` is not a valid flag.
 
 **Output**:
 ```
@@ -391,6 +448,23 @@ dmn start --config ./config/staging.json
 # Production-like environment
 dmn start --config ./config/prod-local.json
 ```
+
+### Extension Packaging + Install Automation (Maintainers)
+
+```bash
+# Run package + install workflow through OpenDaemon service automation
+dmn start extension-package-install
+```
+
+What this runs:
+- `.\scripts\package-extension-quick.ps1`
+- `.\scripts\install-extension.ps1`
+
+Notes:
+- The install script uses `--force`, so this flow is typically non-interactive (no `y` prompt required).
+- If a subprocess does prompt, OpenDaemon service terminals support stdin forwarding, so you can type into the terminal.
+- This service is in `dmn.json`; use scoped starts (like `dmn start frontend`) when you do not want packaging/install to run during `dmn start`.
+- End the session with `Ctrl+C` (or `dmn stop`) after `Workflow complete...` appears.
 
 ### AI Integration Workflow
 

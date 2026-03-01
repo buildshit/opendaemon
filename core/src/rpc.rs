@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 use crate::orchestrator::Orchestrator;
+
+const DAEMON_IPC_FILENAME: &str = "daemon-ipc.json";
 
 /// JSON-RPC 2.0 request from the VS Code extension
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -85,7 +90,10 @@ impl RpcError {
 
     /// Server error (-32000 to -32099)
     pub fn server_error(code: i32, message: impl Into<String>) -> Self {
-        assert!((-32099..=-32000).contains(&code), "Server error codes must be between -32099 and -32000");
+        assert!(
+            (-32099..=-32000).contains(&code),
+            "Server error codes must be between -32099 and -32000"
+        );
         Self::new(code, message)
     }
 }
@@ -125,13 +133,27 @@ impl JsonRpcNotification {
 pub enum RpcRequest {
     StartAll,
     StopAll,
-    StartService { service: String },
-    StopService { service: String },
-    RestartService { service: String },
+    StartService {
+        service: String,
+    },
+    StopService {
+        service: String,
+    },
+    RestartService {
+        service: String,
+    },
     GetStatus,
-    GetLogs { service: String, lines: LogLinesParam },
-    WriteStdin { service: String, data: String },
-    GetDependencies { service: String },
+    GetLogs {
+        service: String,
+        lines: LogLinesParam,
+    },
+    WriteStdin {
+        service: String,
+        data: String,
+    },
+    GetDependencies {
+        service: String,
+    },
 }
 
 /// Parameter for specifying how many log lines to retrieve
@@ -162,69 +184,99 @@ impl RpcRequest {
             "startAll" => Ok(RpcRequest::StartAll),
             "stopAll" => Ok(RpcRequest::StopAll),
             "startService" => {
-                let params = req.params.as_ref()
+                let params = req
+                    .params
+                    .as_ref()
                     .ok_or_else(|| RpcError::invalid_params("Missing params for startService"))?;
-                let service = params.get("service")
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
                 Ok(RpcRequest::StartService { service })
             }
             "stopService" => {
-                let params = req.params.as_ref()
+                let params = req
+                    .params
+                    .as_ref()
                     .ok_or_else(|| RpcError::invalid_params("Missing params for stopService"))?;
-                let service = params.get("service")
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
                 Ok(RpcRequest::StopService { service })
             }
             "restartService" => {
-                let params = req.params.as_ref()
+                let params = req
+                    .params
+                    .as_ref()
                     .ok_or_else(|| RpcError::invalid_params("Missing params for restartService"))?;
-                let service = params.get("service")
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
                 Ok(RpcRequest::RestartService { service })
             }
             "getStatus" => Ok(RpcRequest::GetStatus),
             "getLogs" => {
-                let params = req.params.as_ref()
+                let params = req
+                    .params
+                    .as_ref()
                     .ok_or_else(|| RpcError::invalid_params("Missing params for getLogs"))?;
-                let service = params.get("service")
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
-                
+
                 let lines = if let Some(lines_value) = params.get("lines") {
                     serde_json::from_value(lines_value.clone())
                         .map_err(|_| RpcError::invalid_params("Invalid 'lines' parameter"))?
                 } else {
                     LogLinesParam::All("all".to_string())
                 };
-                
+
                 Ok(RpcRequest::GetLogs { service, lines })
             }
             "writeStdin" => {
-                let params = req.params.as_ref()
+                let params = req
+                    .params
+                    .as_ref()
                     .ok_or_else(|| RpcError::invalid_params("Missing params for writeStdin"))?;
-                let service = params.get("service")
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
-                let data = params.get("data")
+                let data = params
+                    .get("data")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'data' parameter"))?
                     .to_string();
                 Ok(RpcRequest::WriteStdin { service, data })
             }
             "getDependencies" => {
-                let params = req.params.as_ref()
-                    .ok_or_else(|| RpcError::invalid_params("Missing params for getDependencies"))?;
-                let service = params.get("service")
+                let params = req.params.as_ref().ok_or_else(|| {
+                    RpcError::invalid_params("Missing params for getDependencies")
+                })?;
+                let service = params
+                    .get("service")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| RpcError::invalid_params("Missing or invalid 'service' parameter"))?
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("Missing or invalid 'service' parameter")
+                    })?
                     .to_string();
                 Ok(RpcRequest::GetDependencies { service })
             }
@@ -236,30 +288,93 @@ impl RpcRequest {
 /// RPC Server that communicates via stdin/stdout
 pub struct RpcServer {
     orchestrator: Arc<Mutex<Orchestrator>>,
+    ipc_config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DaemonIpcInfo {
+    config_path: String,
+    address: String,
+    pid: u32,
+    created_at_unix: u64,
+}
+
+#[derive(Debug)]
+struct IpcRegistration {
+    info_path: PathBuf,
+    address: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for IpcRegistration {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_file(&self.info_path);
+    }
 }
 
 impl RpcServer {
     pub fn new(orchestrator: Arc<Mutex<Orchestrator>>) -> Self {
-        Self { orchestrator }
+        Self {
+            orchestrator,
+            ipc_config_path: None,
+        }
+    }
+
+    pub fn with_cli_ipc(orchestrator: Arc<Mutex<Orchestrator>>, config_path: PathBuf) -> Self {
+        Self {
+            orchestrator,
+            ipc_config_path: Some(config_path),
+        }
     }
 
     /// Run the RPC server, reading from stdin and writing to stdout
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let stdin = tokio::io::stdin();
-        let mut stdout = tokio::io::stdout();
+        let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
         let mut reader = BufReader::new(stdin);
         let mut line = String::new();
 
         // Start event streaming in a separate task
         let orchestrator_clone = Arc::clone(&self.orchestrator);
+        let stdout_for_events = Arc::clone(&stdout);
         tokio::spawn(async move {
-            Self::stream_events(orchestrator_clone).await;
+            Self::stream_events(orchestrator_clone, stdout_for_events).await;
         });
+
+        // Reconcile naturally exited processes so status/events stay accurate even
+        // when a service exits without an explicit stop request.
+        let orchestrator_monitor_clone = Arc::clone(&self.orchestrator);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                ticker.tick().await;
+                let mut orch = orchestrator_monitor_clone.lock().await;
+                orch.reconcile_exited_processes().await;
+            }
+        });
+
+        // Expose a local loopback IPC endpoint so CLI commands can talk to
+        // the same daemon instance used by the extension.
+        let _ipc_registration = if let Some(config_path) = self.ipc_config_path.as_ref() {
+            match Self::start_cli_ipc_server(Arc::clone(&self.orchestrator), config_path).await {
+                Ok(registration) => {
+                    eprintln!("CLI IPC listening on {}", registration.address);
+                    Some(registration)
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to start CLI IPC server: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         loop {
             line.clear();
             let bytes_read = reader.read_line(&mut line).await?;
-            
+
             // EOF reached
             if bytes_read == 0 {
                 break;
@@ -284,25 +399,152 @@ impl RpcServer {
                 }
                 Err(e) => {
                     // Parse error - we don't have an ID, so use 0
-                    JsonRpcResponse::error(
-                        0,
-                        RpcError::parse_error(format!("Invalid JSON: {}", e)),
-                    )
+                    JsonRpcResponse::error(0, RpcError::parse_error(format!("Invalid JSON: {}", e)))
                 }
             };
 
             // Write response to stdout
             let response_json = serde_json::to_string(&response)?;
-            stdout.write_all(response_json.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+            Self::write_json_line(&stdout, &response_json).await?;
         }
 
         Ok(())
     }
 
+    async fn write_json_line(
+        stdout: &Arc<Mutex<tokio::io::Stdout>>,
+        line: &str,
+    ) -> Result<(), std::io::Error> {
+        let mut out = stdout.lock().await;
+        out.write_all(line.as_bytes()).await?;
+        out.write_all(b"\n").await?;
+        out.flush().await?;
+        Ok(())
+    }
+
+    async fn start_cli_ipc_server(
+        orchestrator: Arc<Mutex<Orchestrator>>,
+        config_path: &Path,
+    ) -> Result<IpcRegistration, std::io::Error> {
+        let runtime_dir = Self::runtime_dir_for_config(config_path);
+        std::fs::create_dir_all(&runtime_dir)?;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?.to_string();
+        let info_path = runtime_dir.join(DAEMON_IPC_FILENAME);
+        let info = DaemonIpcInfo {
+            config_path: Self::config_identity(config_path),
+            address: address.clone(),
+            pid: std::process::id(),
+            created_at_unix: Self::now_unix_secs(),
+        };
+        let payload = serde_json::to_string_pretty(&info).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("failed to serialize daemon IPC info: {}", e),
+            )
+        })?;
+        std::fs::write(&info_path, payload)?;
+
+        let task = tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        eprintln!("CLI IPC accept error: {}", e);
+                        break;
+                    }
+                };
+
+                let orchestrator_for_client = Arc::clone(&orchestrator);
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        Self::handle_cli_ipc_client(stream, orchestrator_for_client).await
+                    {
+                        eprintln!("CLI IPC client error: {}", e);
+                    }
+                });
+            }
+        });
+
+        Ok(IpcRegistration {
+            info_path,
+            address,
+            task,
+        })
+    }
+
+    async fn handle_cli_ipc_client(
+        stream: TcpStream,
+        orchestrator: Arc<Mutex<Orchestrator>>,
+    ) -> Result<(), std::io::Error> {
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let bytes_read = reader.read_line(&mut line).await?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+                Ok(json_req) => match RpcRequest::from_json_rpc(&json_req) {
+                    Ok(req) => {
+                        Self::handle_request_with_orchestrator(&orchestrator, json_req.id, req)
+                            .await
+                    }
+                    Err(err) => JsonRpcResponse::error(json_req.id, err),
+                },
+                Err(e) => {
+                    JsonRpcResponse::error(0, RpcError::parse_error(format!("Invalid JSON: {}", e)))
+                }
+            };
+
+            let response_json = serde_json::to_string(&response).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to serialize JSON-RPC response: {}", e),
+                )
+            })?;
+            write_half.write_all(response_json.as_bytes()).await?;
+            write_half.write_all(b"\n").await?;
+            write_half.flush().await?;
+        }
+
+        Ok(())
+    }
+
+    fn runtime_dir_for_config(config_path: &Path) -> PathBuf {
+        let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+        config_dir.join(".dmn")
+    }
+
+    fn config_identity(config_path: &Path) -> String {
+        std::fs::canonicalize(config_path)
+            .unwrap_or_else(|_| config_path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn now_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
     /// Stream orchestrator events as JSON-RPC notifications
-    async fn stream_events(orchestrator: Arc<Mutex<Orchestrator>>) {
+    async fn stream_events(
+        orchestrator: Arc<Mutex<Orchestrator>>,
+        stdout: Arc<Mutex<tokio::io::Stdout>>,
+    ) {
         // Subscribe to events from the orchestrator's broadcast channel
         let mut event_rx = {
             let orch = orchestrator.lock().await;
@@ -314,7 +556,8 @@ impl RpcServer {
             match event_rx.recv().await {
                 Ok(event) => {
                     let notification = Self::event_to_notification(event);
-                    if let Err(e) = Self::send_notification(notification).await {
+                    if let Err(e) = Self::send_notification_with_stdout(notification, &stdout).await
+                    {
                         eprintln!("Error sending notification: {}", e);
                     }
                 }
@@ -331,79 +574,81 @@ impl RpcServer {
         }
     }
 
+    async fn send_notification_with_stdout(
+        notification: JsonRpcNotification,
+        stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let notification_json = serde_json::to_string(&notification)?;
+        Self::write_json_line(stdout, &notification_json).await?;
+        Ok(())
+    }
+
     /// Convert an OrchestratorEvent to a JSON-RPC notification
     fn event_to_notification(event: crate::orchestrator::OrchestratorEvent) -> JsonRpcNotification {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         match event {
             OrchestratorEvent::ServiceStarting { service } => {
-                JsonRpcNotification::new(
-                    "serviceStarting",
-                    json!({ "service": service }),
-                )
+                JsonRpcNotification::new("serviceStarting", json!({ "service": service }))
             }
             OrchestratorEvent::ServiceReady { service } => {
-                JsonRpcNotification::new(
-                    "serviceReady",
-                    json!({ "service": service }),
-                )
+                JsonRpcNotification::new("serviceReady", json!({ "service": service }))
             }
-            OrchestratorEvent::ServiceFailed { service, error } => {
-                JsonRpcNotification::new(
-                    "serviceFailed",
-                    json!({ "service": service, "error": error }),
-                )
-            }
+            OrchestratorEvent::ServiceFailed { service, error } => JsonRpcNotification::new(
+                "serviceFailed",
+                json!({ "service": service, "error": error }),
+            ),
             OrchestratorEvent::ServiceStopped { service } => {
-                JsonRpcNotification::new(
-                    "serviceStopped",
-                    json!({ "service": service }),
-                )
+                JsonRpcNotification::new("serviceStopped", json!({ "service": service }))
             }
-            OrchestratorEvent::LogLine { service, line } => {
-                JsonRpcNotification::new(
-                    "logLine",
-                    json!({
-                        "service": service,
-                        "timestamp": line.timestamp.duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        "content": line.content,
-                        "stream": match line.stream {
-                            crate::logs::LogStream::Stdout => "stdout",
-                            crate::logs::LogStream::Stderr => "stderr",
-                        }
-                    }),
-                )
-            }
-            OrchestratorEvent::Error { message, category } => {
-                JsonRpcNotification::new(
-                    "error",
-                    json!({ "message": message, "category": category }),
-                )
-            }
+            OrchestratorEvent::LogLine { service, line } => JsonRpcNotification::new(
+                "logLine",
+                json!({
+                    "service": service,
+                    "timestamp": line.timestamp.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    "content": line.content,
+                    "stream": match line.stream {
+                        crate::logs::LogStream::Stdout => "stdout",
+                        crate::logs::LogStream::Stderr => "stderr",
+                    }
+                }),
+            ),
+            OrchestratorEvent::Error { message, category } => JsonRpcNotification::new(
+                "error",
+                json!({ "message": message, "category": category }),
+            ),
         }
     }
 
     /// Handle a parsed RPC request and return a response
     async fn handle_request(&self, id: u64, request: RpcRequest) -> JsonRpcResponse {
+        Self::handle_request_with_orchestrator(&self.orchestrator, id, request).await
+    }
+
+    async fn handle_request_with_orchestrator(
+        orchestrator: &Arc<Mutex<Orchestrator>>,
+        id: u64,
+        request: RpcRequest,
+    ) -> JsonRpcResponse {
         match request {
             RpcRequest::StartAll => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.start_all().await {
                     Ok(_) => JsonRpcResponse::success(id, json!({"status": "started"})),
                     Err(e) => JsonRpcResponse::error(id, RpcError::internal_error(e.to_string())),
                 }
             }
             RpcRequest::StopAll => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.stop_all().await {
                     Ok(_) => JsonRpcResponse::success(id, json!({"status": "stopped"})),
                     Err(e) => JsonRpcResponse::error(id, RpcError::internal_error(e.to_string())),
                 }
             }
             RpcRequest::StartService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.start_service_with_deps(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -413,7 +658,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::StopService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.stop_service(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -423,7 +668,7 @@ impl RpcServer {
                 }
             }
             RpcRequest::RestartService { service } => {
-                let mut orch = self.orchestrator.lock().await;
+                let mut orch = orchestrator.lock().await;
                 match orch.restart_service(&service).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -433,20 +678,25 @@ impl RpcServer {
                 }
             }
             RpcRequest::GetStatus => {
-                let orch = self.orchestrator.lock().await;
+                let orch = orchestrator.lock().await;
                 let spawned_statuses = orch.process_manager.get_all_statuses();
-                
+
                 // Check ready watcher state for accurate status
                 let ready_watcher = orch.ready_watcher().lock().await;
-                
+
                 // Build status map including ALL services from config
                 // Services not yet started will show as "not_started"
                 // If a service is in "Starting" but ready_watcher shows it's ready, report "running"
-                let status_map: HashMap<String, String> = orch.config().services.keys()
+                let status_map: HashMap<String, String> = orch
+                    .config()
+                    .services
+                    .keys()
                     .map(|name| {
                         let status_str = if let Some(status) = spawned_statuses.get(name) {
                             match status {
-                                crate::process::ServiceStatus::NotStarted => "not_started".to_string(),
+                                crate::process::ServiceStatus::NotStarted => {
+                                    "not_started".to_string()
+                                }
                                 crate::process::ServiceStatus::Starting => {
                                     // Check if ready watcher says this service is ready
                                     if ready_watcher.is_ready(name) {
@@ -467,14 +717,14 @@ impl RpcServer {
                         (name.clone(), status_str)
                     })
                     .collect();
-                
+
                 drop(ready_watcher); // Release the lock
-                
+
                 JsonRpcResponse::success(id, json!({"services": status_map}))
             }
             RpcRequest::GetLogs { service, lines } => {
-                let orch = self.orchestrator.lock().await;
-                
+                let orch = orchestrator.lock().await;
+
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {
                     return JsonRpcResponse::error(
@@ -482,7 +732,7 @@ impl RpcServer {
                         RpcError::server_error(-32001, format!("Service not found: {}", service)),
                     );
                 }
-                
+
                 let log_buffer = orch.log_buffer.lock().await;
                 let log_lines = if lines.is_all() {
                     log_buffer.get_all_lines(&service)
@@ -491,7 +741,7 @@ impl RpcServer {
                 } else {
                     log_buffer.get_all_lines(&service)
                 };
-                
+
                 // Convert log lines to JSON-friendly format
                 let logs: Vec<serde_json::Value> = log_lines
                     .into_iter()
@@ -508,7 +758,7 @@ impl RpcServer {
                         })
                     })
                     .collect();
-                
+
                 JsonRpcResponse::success(
                     id,
                     json!({
@@ -518,8 +768,8 @@ impl RpcServer {
                 )
             }
             RpcRequest::WriteStdin { service, data } => {
-                let mut orch = self.orchestrator.lock().await;
-                
+                let mut orch = orchestrator.lock().await;
+
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {
                     return JsonRpcResponse::error(
@@ -527,7 +777,7 @@ impl RpcServer {
                         RpcError::server_error(-32001, format!("Service not found: {}", service)),
                     );
                 }
-                
+
                 match orch.process_manager.write_stdin(&service, &data).await {
                     Ok(_) => JsonRpcResponse::success(
                         id,
@@ -537,8 +787,8 @@ impl RpcServer {
                 }
             }
             RpcRequest::GetDependencies { service } => {
-                let orch = self.orchestrator.lock().await;
-                
+                let orch = orchestrator.lock().await;
+
                 // Check if service exists in config
                 if !orch.config().services.contains_key(&service) {
                     return JsonRpcResponse::error(
@@ -546,7 +796,7 @@ impl RpcServer {
                         RpcError::server_error(-32001, format!("Service not found: {}", service)),
                     );
                 }
-                
+
                 // Get dependencies from graph (direct dependencies)
                 match orch.graph().get_dependencies(&service) {
                     Ok(deps) => JsonRpcResponse::success(
@@ -692,7 +942,12 @@ mod tests {
         };
 
         let req = RpcRequest::from_json_rpc(&json_req).unwrap();
-        assert_eq!(req, RpcRequest::StartService { service: "backend".to_string() });
+        assert_eq!(
+            req,
+            RpcRequest::StartService {
+                service: "backend".to_string()
+            }
+        );
     }
 
     #[test]
@@ -705,7 +960,12 @@ mod tests {
         };
 
         let req = RpcRequest::from_json_rpc(&json_req).unwrap();
-        assert_eq!(req, RpcRequest::StopService { service: "frontend".to_string() });
+        assert_eq!(
+            req,
+            RpcRequest::StopService {
+                service: "frontend".to_string()
+            }
+        );
     }
 
     #[test]
@@ -718,7 +978,12 @@ mod tests {
         };
 
         let req = RpcRequest::from_json_rpc(&json_req).unwrap();
-        assert_eq!(req, RpcRequest::RestartService { service: "database".to_string() });
+        assert_eq!(
+            req,
+            RpcRequest::RestartService {
+                service: "database".to_string()
+            }
+        );
     }
 
     #[test]
@@ -838,7 +1103,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_notification() {
-        let notification = JsonRpcNotification::new("serviceStarted", json!({"service": "backend"}));
+        let notification =
+            JsonRpcNotification::new("serviceStarted", json!({"service": "backend"}));
         assert_eq!(notification.jsonrpc, "2.0");
         assert_eq!(notification.method, "serviceStarted");
 
@@ -870,9 +1136,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_rpc_server_parse_and_respond() {
-        use tokio::io::AsyncWriteExt;
         use std::collections::HashMap;
-        
+        use tokio::io::AsyncWriteExt;
+
         // Create a mock orchestrator
         let config = crate::config::DmnConfig {
             version: "1.0".to_string(),
@@ -895,7 +1161,9 @@ mod tests {
             // Read one request
             reader.read_line(&mut line).await.unwrap();
             let json_req: JsonRpcRequest = serde_json::from_str(&line).unwrap();
-            let response = server.handle_request(json_req.id, RpcRequest::from_json_rpc(&json_req).unwrap()).await;
+            let response = server
+                .handle_request(json_req.id, RpcRequest::from_json_rpc(&json_req).unwrap())
+                .await;
             let response_json = serde_json::to_string(&response).unwrap();
             writer.write_all(response_json.as_bytes()).await.unwrap();
             writer.write_all(b"\n").await.unwrap();
@@ -910,7 +1178,10 @@ mod tests {
             params: None,
         };
         let request_json = serde_json::to_string(&request).unwrap();
-        stdin_write.write_all(request_json.as_bytes()).await.unwrap();
+        stdin_write
+            .write_all(request_json.as_bytes())
+            .await
+            .unwrap();
         stdin_write.write_all(b"\n").await.unwrap();
         stdin_write.flush().await.unwrap();
 
@@ -931,17 +1202,21 @@ mod tests {
     #[tokio::test]
     async fn test_send_notification() {
         use tokio::io::AsyncWriteExt;
-        
+
         // Capture stdout
         let (mut stdout_write, mut stdout_read) = tokio::io::duplex(1024);
 
         // Send notification in a separate task
-        let notification = JsonRpcNotification::new("serviceStarted", json!({"service": "backend"}));
+        let notification =
+            JsonRpcNotification::new("serviceStarted", json!({"service": "backend"}));
         let notification_clone = notification.clone();
-        
+
         tokio::spawn(async move {
             let notification_json = serde_json::to_string(&notification_clone).unwrap();
-            stdout_write.write_all(notification_json.as_bytes()).await.unwrap();
+            stdout_write
+                .write_all(notification_json.as_bytes())
+                .await
+                .unwrap();
             stdout_write.write_all(b"\n").await.unwrap();
             stdout_write.flush().await.unwrap();
         });
@@ -996,7 +1271,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1011,13 +1291,15 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            3,
-            RpcRequest::StartService {
-                service: "test_service".to_string(),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                3,
+                RpcRequest::StartService {
+                    service: "test_service".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 3);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
@@ -1033,13 +1315,15 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            4,
-            RpcRequest::StartService {
-                service: "nonexistent".to_string(),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                4,
+                RpcRequest::StartService {
+                    service: "nonexistent".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 4);
         assert!(response.result.is_none());
         assert!(response.error.is_some());
@@ -1051,7 +1335,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "timeout /t 10" } else { "sleep 10" }.to_string(),
+                command: if cfg!(windows) {
+                    "timeout /t 10"
+                } else {
+                    "sleep 10"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1063,21 +1352,26 @@ mod tests {
             services,
         };
         let mut orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
-        
+
         // Start the service first
-        orchestrator.start_service_with_deps("test_service").await.unwrap();
+        orchestrator
+            .start_service_with_deps("test_service")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            5,
-            RpcRequest::StopService {
-                service: "test_service".to_string(),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                5,
+                RpcRequest::StopService {
+                    service: "test_service".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 5);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
@@ -1089,7 +1383,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1104,13 +1403,15 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            6,
-            RpcRequest::RestartService {
-                service: "test_service".to_string(),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                6,
+                RpcRequest::RestartService {
+                    service: "test_service".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 6);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
@@ -1122,7 +1423,12 @@ mod tests {
         services.insert(
             "service1".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1131,7 +1437,12 @@ mod tests {
         services.insert(
             "service2".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1143,20 +1454,23 @@ mod tests {
             services,
         };
         let mut orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
-        
+
         // Start one service
-        orchestrator.start_service_with_deps("service1").await.unwrap();
+        orchestrator
+            .start_service_with_deps("service1")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
         let response = server.handle_request(7, RpcRequest::GetStatus).await;
-        
+
         assert_eq!(response.id, 7);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
-        
+
         let result = response.result.unwrap();
         assert!(result.get("services").is_some());
     }
@@ -1167,7 +1481,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test output" } else { "echo test output" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test output"
+                } else {
+                    "echo test output"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1179,26 +1498,31 @@ mod tests {
             services,
         };
         let mut orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
-        
+
         // Start the service
-        orchestrator.start_service_with_deps("test_service").await.unwrap();
+        orchestrator
+            .start_service_with_deps("test_service")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            8,
-            RpcRequest::GetLogs {
-                service: "test_service".to_string(),
-                lines: LogLinesParam::All("all".to_string()),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                8,
+                RpcRequest::GetLogs {
+                    service: "test_service".to_string(),
+                    lines: LogLinesParam::All("all".to_string()),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 8);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
-        
+
         let result = response.result.unwrap();
         assert!(result.get("service").is_some());
         assert!(result.get("logs").is_some());
@@ -1210,7 +1534,12 @@ mod tests {
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1222,22 +1551,27 @@ mod tests {
             services,
         };
         let mut orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
-        
+
         // Start the service
-        orchestrator.start_service_with_deps("test_service").await.unwrap();
+        orchestrator
+            .start_service_with_deps("test_service")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            9,
-            RpcRequest::GetLogs {
-                service: "test_service".to_string(),
-                lines: LogLinesParam::Count(10),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                9,
+                RpcRequest::GetLogs {
+                    service: "test_service".to_string(),
+                    lines: LogLinesParam::Count(10),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 9);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
@@ -1253,18 +1587,20 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            10,
-            RpcRequest::GetLogs {
-                service: "nonexistent".to_string(),
-                lines: LogLinesParam::All("all".to_string()),
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                10,
+                RpcRequest::GetLogs {
+                    service: "nonexistent".to_string(),
+                    lines: LogLinesParam::All("all".to_string()),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 10);
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let error = response.error.unwrap();
         assert_eq!(error.code, -32001);
     }
@@ -1274,11 +1610,11 @@ mod tests {
     #[test]
     fn test_event_to_notification_service_starting() {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         let event = OrchestratorEvent::ServiceStarting {
             service: "backend".to_string(),
         };
-        
+
         let notification = RpcServer::event_to_notification(event);
         assert_eq!(notification.method, "serviceStarting");
         assert_eq!(notification.params.get("service").unwrap(), "backend");
@@ -1287,11 +1623,11 @@ mod tests {
     #[test]
     fn test_event_to_notification_service_ready() {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         let event = OrchestratorEvent::ServiceReady {
             service: "database".to_string(),
         };
-        
+
         let notification = RpcServer::event_to_notification(event);
         assert_eq!(notification.method, "serviceReady");
         assert_eq!(notification.params.get("service").unwrap(), "database");
@@ -1300,26 +1636,29 @@ mod tests {
     #[test]
     fn test_event_to_notification_service_failed() {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         let event = OrchestratorEvent::ServiceFailed {
             service: "frontend".to_string(),
             error: "Connection refused".to_string(),
         };
-        
+
         let notification = RpcServer::event_to_notification(event);
         assert_eq!(notification.method, "serviceFailed");
         assert_eq!(notification.params.get("service").unwrap(), "frontend");
-        assert_eq!(notification.params.get("error").unwrap(), "Connection refused");
+        assert_eq!(
+            notification.params.get("error").unwrap(),
+            "Connection refused"
+        );
     }
 
     #[test]
     fn test_event_to_notification_service_stopped() {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         let event = OrchestratorEvent::ServiceStopped {
             service: "backend".to_string(),
         };
-        
+
         let notification = RpcServer::event_to_notification(event);
         assert_eq!(notification.method, "serviceStopped");
         assert_eq!(notification.params.get("service").unwrap(), "backend");
@@ -1327,25 +1666,28 @@ mod tests {
 
     #[test]
     fn test_event_to_notification_log_line() {
-        use crate::orchestrator::OrchestratorEvent;
         use crate::logs::{LogLine, LogStream};
+        use crate::orchestrator::OrchestratorEvent;
         use std::time::SystemTime;
-        
+
         let log_line = LogLine {
             timestamp: SystemTime::now(),
             content: "Server started on port 3000".to_string(),
             stream: LogStream::Stdout,
         };
-        
+
         let event = OrchestratorEvent::LogLine {
             service: "backend".to_string(),
             line: log_line,
         };
-        
+
         let notification = RpcServer::event_to_notification(event);
         assert_eq!(notification.method, "logLine");
         assert_eq!(notification.params.get("service").unwrap(), "backend");
-        assert_eq!(notification.params.get("content").unwrap(), "Server started on port 3000");
+        assert_eq!(
+            notification.params.get("content").unwrap(),
+            "Server started on port 3000"
+        );
         assert_eq!(notification.params.get("stream").unwrap(), "stdout");
         assert!(notification.params.get("timestamp").is_some());
     }
@@ -1353,13 +1695,18 @@ mod tests {
     #[tokio::test]
     async fn test_event_streaming_integration() {
         use crate::orchestrator::OrchestratorEvent;
-        
+
         // Create orchestrator
         let mut services = HashMap::new();
         services.insert(
             "test_service".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1371,28 +1718,28 @@ mod tests {
             services,
         };
         let orchestrator = crate::orchestrator::Orchestrator::new(config).unwrap();
-        
+
         // Subscribe first so the channel has a receiver (broadcast requires at least one subscriber)
         let _event_rx = orchestrator.subscribe_events();
-        
+
         // Get event sender (for emitting events)
         let event_tx = orchestrator.event_sender();
-        
+
         // Send a test event - should succeed now that we have a subscriber
         let test_event = OrchestratorEvent::ServiceStarting {
             service: "test_service".to_string(),
         };
-        
+
         // With a subscriber, send should succeed
         let send_result = event_tx.send(test_event);
         assert!(send_result.is_ok());
-        
+
         // Convert to notification
         let event = OrchestratorEvent::ServiceReady {
             service: "test_service".to_string(),
         };
         let notification = RpcServer::event_to_notification(event);
-        
+
         // Verify notification structure
         assert_eq!(notification.jsonrpc, "2.0");
         assert_eq!(notification.method, "serviceReady");
@@ -1411,10 +1758,13 @@ mod tests {
         };
 
         let req = RpcRequest::from_json_rpc(&json_req).unwrap();
-        assert_eq!(req, RpcRequest::WriteStdin { 
-            service: "backend".to_string(), 
-            data: "hello world\n".to_string() 
-        });
+        assert_eq!(
+            req,
+            RpcRequest::WriteStdin {
+                service: "backend".to_string(),
+                data: "hello world\n".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1457,7 +1807,12 @@ mod tests {
         };
 
         let req = RpcRequest::from_json_rpc(&json_req).unwrap();
-        assert_eq!(req, RpcRequest::GetDependencies { service: "frontend".to_string() });
+        assert_eq!(
+            req,
+            RpcRequest::GetDependencies {
+                service: "frontend".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1481,7 +1836,12 @@ mod tests {
         services.insert(
             "database".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo db" } else { "echo db" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo db"
+                } else {
+                    "echo db"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1490,7 +1850,12 @@ mod tests {
         services.insert(
             "backend".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo backend" } else { "echo backend" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo backend"
+                } else {
+                    "echo backend"
+                }
+                .to_string(),
                 depends_on: vec!["database".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1499,7 +1864,12 @@ mod tests {
         services.insert(
             "frontend".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo frontend" } else { "echo frontend" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo frontend"
+                } else {
+                    "echo frontend"
+                }
+                .to_string(),
                 depends_on: vec!["backend".to_string()],
                 ready_when: None,
                 env_file: None,
@@ -1515,15 +1885,19 @@ mod tests {
         let server = RpcServer::new(orchestrator);
 
         // Test getting dependencies for frontend (should return backend)
-        let response = server.handle_request(
-            25,
-            RpcRequest::GetDependencies { service: "frontend".to_string() },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                25,
+                RpcRequest::GetDependencies {
+                    service: "frontend".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 25);
         assert!(response.result.is_some());
         assert!(response.error.is_none());
-        
+
         let result = response.result.unwrap();
         assert_eq!(result.get("service").unwrap(), "frontend");
         let deps = result.get("dependencies").unwrap().as_array().unwrap();
@@ -1537,7 +1911,12 @@ mod tests {
         services.insert(
             "standalone".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1552,14 +1931,18 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            26,
-            RpcRequest::GetDependencies { service: "standalone".to_string() },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                26,
+                RpcRequest::GetDependencies {
+                    service: "standalone".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 26);
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         let deps = result.get("dependencies").unwrap().as_array().unwrap();
         assert_eq!(deps.len(), 0);
@@ -1575,15 +1958,19 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            27,
-            RpcRequest::GetDependencies { service: "nonexistent".to_string() },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                27,
+                RpcRequest::GetDependencies {
+                    service: "nonexistent".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 27);
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let error = response.error.unwrap();
         assert_eq!(error.code, -32001);
     }
@@ -1598,14 +1985,16 @@ mod tests {
         let orchestrator = Arc::new(Mutex::new(orchestrator));
         let server = RpcServer::new(orchestrator);
 
-        let response = server.handle_request(
-            28,
-            RpcRequest::WriteStdin { 
-                service: "nonexistent".to_string(), 
-                data: "test\n".to_string() 
-            },
-        ).await;
-        
+        let response = server
+            .handle_request(
+                28,
+                RpcRequest::WriteStdin {
+                    service: "nonexistent".to_string(),
+                    data: "test\n".to_string(),
+                },
+            )
+            .await;
+
         assert_eq!(response.id, 28);
         assert!(response.result.is_none());
         assert!(response.error.is_some());
@@ -1618,7 +2007,12 @@ mod tests {
         services.insert(
             "service1".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1627,7 +2021,12 @@ mod tests {
         services.insert(
             "service2".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1636,7 +2035,12 @@ mod tests {
         services.insert(
             "service3".to_string(),
             crate::config::ServiceConfig {
-                command: if cfg!(windows) { "cmd /c echo test" } else { "echo test" }.to_string(),
+                command: if cfg!(windows) {
+                    "cmd /c echo test"
+                } else {
+                    "echo test"
+                }
+                .to_string(),
                 depends_on: vec![],
                 ready_when: None,
                 env_file: None,
@@ -1653,19 +2057,19 @@ mod tests {
         let server = RpcServer::new(orchestrator);
 
         let response = server.handle_request(29, RpcRequest::GetStatus).await;
-        
+
         assert_eq!(response.id, 29);
         assert!(response.result.is_some());
-        
+
         let result = response.result.unwrap();
         let services = result.get("services").unwrap().as_object().unwrap();
-        
+
         // All 3 services should be present even though none were started
         assert_eq!(services.len(), 3);
         assert!(services.contains_key("service1"));
         assert!(services.contains_key("service2"));
         assert!(services.contains_key("service3"));
-        
+
         // All should be "not_started"
         assert_eq!(services.get("service1").unwrap(), "not_started");
         assert_eq!(services.get("service2").unwrap(), "not_started");

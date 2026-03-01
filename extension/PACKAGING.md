@@ -32,6 +32,22 @@ This creates a `.vsix` file in the `dist/` directory that includes binaries for 
 
 This is faster for development but only includes the binary for your current platform.
 
+### One-Step Package + Install (Development)
+
+For rapid local testing, you can package and install the extension in one pass:
+
+```powershell
+.\scripts\package-and-install-extension.ps1
+```
+
+Or via OpenDaemon automation service:
+
+```bash
+dmn start extension-package-install
+```
+
+This avoids stale installed extension code when your workspace `src/` changes are newer than the installed `out/` bundle.
+
 ## Packaging Process
 
 The packaging script performs the following steps:

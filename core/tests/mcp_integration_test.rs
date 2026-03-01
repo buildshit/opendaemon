@@ -48,7 +48,7 @@ fn send_mcp_request(
     // Read response
     let mut response_line = String::new();
     stdout.read_line(&mut response_line)?;
-    
+
     let response: Value = serde_json::from_str(&response_line)?;
     Ok(response)
 }
@@ -58,7 +58,7 @@ fn send_mcp_request(
 fn test_mcp_server_tools_list() {
     // This test spawns the actual dmn binary in MCP mode
     // and tests the tools/list endpoint
-    
+
     // Create a temporary config file
     let temp_dir = std::env::temp_dir();
     let config_path = temp_dir.join("test_dmn.json");
@@ -86,22 +86,24 @@ fn test_mcp_server_tools_list() {
         "params": null
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 1);
     assert!(response["result"].is_object());
-    
-    let tools = response["result"]["tools"].as_array().expect("tools should be an array");
+
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tools should be an array");
     assert_eq!(tools.len(), 3);
-    
+
     let tool_names: Vec<String> = tools
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    
+
     assert!(tool_names.contains(&"read_logs".to_string()));
     assert!(tool_names.contains(&"get_service_status".to_string()));
     assert!(tool_names.contains(&"list_services".to_string()));
@@ -144,21 +146,23 @@ fn test_mcp_server_list_services() {
         }
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 2);
     assert!(response["result"].is_object());
-    
+
     let result = &response["result"];
     assert_eq!(result["type"], "success");
-    
-    let content = result["content"].as_array().expect("content should be an array");
+
+    let content = result["content"]
+        .as_array()
+        .expect("content should be an array");
     assert_eq!(content.len(), 1);
     assert_eq!(content[0]["type"], "text");
-    
+
     let text = content[0]["text"].as_str().unwrap();
     assert!(text.contains("test_service"));
     assert!(text.contains("database"));
@@ -201,21 +205,23 @@ fn test_mcp_server_get_service_status() {
         }
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 3);
     assert!(response["result"].is_object());
-    
+
     let result = &response["result"];
     assert_eq!(result["type"], "success");
-    
-    let content = result["content"].as_array().expect("content should be an array");
+
+    let content = result["content"]
+        .as_array()
+        .expect("content should be an array");
     assert_eq!(content.len(), 1);
     assert_eq!(content[0]["type"], "text");
-    
+
     let text = content[0]["text"].as_str().unwrap();
     assert!(text.contains("test_service"));
     assert!(text.contains("database"));
@@ -262,18 +268,20 @@ fn test_mcp_server_read_logs() {
         }
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 4);
     assert!(response["result"].is_object());
-    
+
     let result = &response["result"];
     assert_eq!(result["type"], "success");
-    
-    let content = result["content"].as_array().expect("content should be an array");
+
+    let content = result["content"]
+        .as_array()
+        .expect("content should be an array");
     assert_eq!(content.len(), 1);
     assert_eq!(content[0]["type"], "text");
 
@@ -318,16 +326,16 @@ fn test_mcp_server_invalid_service() {
         }
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response contains error
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 5);
-    
+
     let result = &response["result"];
     assert_eq!(result["type"], "error");
-    
+
     let error = result["error"].as_str().unwrap();
     assert!(error.contains("Service not found"));
 
@@ -366,17 +374,20 @@ fn test_mcp_server_unknown_method() {
         "params": null
     });
 
-    let response = send_mcp_request(&mut stdin, &mut stdout_reader, request)
-        .expect("Failed to get response");
+    let response =
+        send_mcp_request(&mut stdin, &mut stdout_reader, request).expect("Failed to get response");
 
     // Verify response contains error
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 6);
     assert!(response["error"].is_object());
-    
+
     let error = &response["error"];
     assert_eq!(error["code"], -32601);
-    assert!(error["message"].as_str().unwrap().contains("Method not found"));
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("Method not found"));
 
     // Clean up
     child.kill().expect("Failed to kill child process");
@@ -412,13 +423,13 @@ fn test_mcp_server_malformed_json() {
     // Read response
     let mut response_line = String::new();
     stdout_reader.read_line(&mut response_line).unwrap();
-    
+
     let response: Value = serde_json::from_str(&response_line).unwrap();
 
     // Verify response contains parse error
     assert_eq!(response["jsonrpc"], "2.0");
     assert!(response["error"].is_object());
-    
+
     let error = &response["error"];
     assert_eq!(error["code"], -32700);
     assert!(error["message"].as_str().unwrap().contains("Parse error"));

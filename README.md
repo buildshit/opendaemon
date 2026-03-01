@@ -68,13 +68,89 @@ Create a `dmn.json` file in your workspace root:
 
 #### Using the CLI
 
-```bash
-# Start the daemon (usually done automatically by the extension)
-dmn daemon
+The `dmn` command is automatically available in all VS Code terminals after installing the extension—no setup required!
 
-# Start in MCP mode for AI agent integration
-dmn mcp
+```bash
+# Check version
+dmn --version
+
+# View all commands
+dmn --help
+
+# Start all services
+dmn start
+
+# Start one service (and its dependencies)
+dmn start frontend
+
+# Check all service statuses
+dmn status
+
+# Check one service status
+dmn status frontend
+
+# Stop one service
+dmn stop frontend
+
+# Restart one service
+dmn restart frontend
+
+# Stop all services
+dmn stop
+
+# Validate MCP setup and config
+dmn mcp --check
 ```
+
+CLI commands (`start`, `stop`, `restart`, `status`) now target the same daemon used by the extension UI/Command Palette when that daemon is running, so both surfaces stay in sync.
+
+When daemon mode is active, realtime service `logLine` notifications are also mirrored in the extension's `OpenDaemon CLI` output channel.
+
+If no extension daemon is available, `dmn` falls back to the local foreground supervisor mode (`dmn start` holds the terminal open, and other CLI commands communicate through `.dmn/runtime-*.json` files).
+
+In local supervisor mode, service activity logs are now streamed live to the CLI output with service + stream context, for example: `[1735689600.123] [frontend:stdout] Server listening on :3000`.
+
+Validated flow in terminal (2026-03-01): `dmn start frontend`, `dmn stop`, `dmn start`, `dmn stop`, `dmn start database`, `dmn restart database`, and `dmn status` all worked as expected with live state reflected from the active controller.
+
+### Extension Dev Packaging Workflow
+
+For extension maintainers, OpenDaemon includes an `extension-package-install` service in `dmn.json` that runs:
+
+- `.\scripts\package-extension-quick.ps1`
+- `.\scripts\install-extension.ps1`
+
+Run it with:
+
+```bash
+dmn start extension-package-install
+```
+
+Notes:
+- This runs `.\scripts\package-extension-quick.ps1` then `.\scripts\install-extension.ps1`.
+- The packaging/install scripts are non-interactive in the normal path (`--force` is used during install), so you typically will not need to type `y`.
+- If any subprocess does prompt, OpenDaemon service terminals can forward stdin input, so interactive confirmation is still possible.
+- This service now lives in your main `dmn.json`, so `dmn start` (all services) can include it. Prefer scoped starts (for example `dmn start frontend`) when you don't want packaging to run.
+- After you see `Workflow complete...`, press `Ctrl+C` (or run `dmn stop`) to end the supervisor session.
+
+Version flags are `--version` / `-V` (lowercase `-v` is not supported).
+
+**📚 Learn more:** [CLI Integration Guide](extension/docs/cli-integration.md)
+
+### Terminal CLI Integration
+
+OpenDaemon automatically makes the `dmn` command available in VS Code's integrated terminal. Simply open a new terminal and start using `dmn` commands immediately:
+
+- **Zero Configuration**: Works right after extension installation
+- **Automatic PATH Injection**: Available in all new VS Code terminals
+- **Cross-Platform**: Works on Windows, macOS, and Linux
+- **Optional Global Install**: Can be installed system-wide for use outside VS Code
+
+**Quick Start:**
+1. Open a new terminal in VS Code (Terminal → New Terminal)
+2. Type `dmn --version` to verify it's working
+3. Use any `dmn` command to manage your services
+
+For detailed information about available commands, global installation, and troubleshooting, see the [CLI Integration Guide](extension/docs/cli-integration.md).
 
 ## Configuration Reference
 

@@ -8,10 +8,17 @@ Write-Host "Building dmn for current platform..." -ForegroundColor Green
 New-Item -ItemType Directory -Force -Path dist | Out-Null
 
 # Build for current platform
-cargo build --release --package dmn-core
+$buildTargetDir = "target/build-current"
+cargo build --release --package dmn-core --target-dir $buildTargetDir
+if ($LASTEXITCODE -ne 0) {
+    throw @"
+Cargo build failed.
+If you see file lock errors, ensure no process is locking artifacts and retry.
+"@
+}
 
 # Copy binary for Windows
-Copy-Item target/release/dmn.exe dist/dmn-win32-x64.exe
+Copy-Item "$buildTargetDir/release/dmn.exe" dist/dmn-win32-x64.exe -Force
 Write-Host "Built for Windows x86_64" -ForegroundColor Cyan
 
 Write-Host "Build complete! Binary is in the dist/ directory:" -ForegroundColor Green

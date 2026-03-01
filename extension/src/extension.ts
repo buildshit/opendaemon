@@ -11,8 +11,11 @@ import { DmnFileWatcher } from './file-watcher';
 import { ErrorDisplayManager, ErrorCategory } from './error-display';
 import { LogDocumentProvider } from './log-document-provider';
 import { ActivityLogger } from './activity-logger';
+import { CLIIntegrationManager } from './cli-integration/cli-integration-manager';
+import { getCLILogger } from './cli-integration/cli-logger';
 
 let daemonManager: DaemonManager | null = null;
+let cliManager: CLIIntegrationManager | null = null;
 let rpcClient: RpcClient | null = null;
 let treeDataProvider: ServiceTreeDataProvider | null = null;
 let commandManager: CommandManager | null = null;
@@ -23,6 +26,7 @@ let extensionContext: vscode.ExtensionContext | null = null;
 let logDocumentProvider: LogDocumentProvider | null = null;
 let activityLogger: ActivityLogger | null = null;
 let statusRefreshInterval: NodeJS.Timeout | null = null;
+let statusRefreshInFlight = false;
 
 // Interval for periodic status refresh (as a fallback to real-time notifications)
 const STATUS_REFRESH_INTERVAL_MS = 2000;
@@ -83,22 +87,142 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     commandManager.registerCommands();
 
+    // Register CLI integration commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.newTerminalWithCLI', async () => {
+            if (cliManager) {
+                try {
+                    const terminal = await cliManager.createTerminalWithCLI();
+                    terminal.show();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to create terminal: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.showCLIInfo', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.showCLIInfo();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to show CLI info: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.installCLIGlobally', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.showGlobalInstallInstructions();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to show installation instructions: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration not available');
+            }
+        })
+    );
+
+    // Register command to show CLI logs
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.showCLILogs', () => {
+            const logger = getCLILogger();
+            logger.show();
+        })
+    );
+
+    // Register command to run CLI diagnostics
+    context.subscriptions.push(
+        vscode.commands.registerCommand('opendaemon.runCLIDiagnostics', async () => {
+            if (cliManager) {
+                try {
+                    await cliManager.runDiagnostics();
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    vscode.window.showErrorMessage(`Failed to run diagnostics: ${errorMsg}`);
+                }
+            } else {
+                vscode.window.showWarningMessage('CLI integration is not active.');
+            }
+        })
+    );
+
     // Initialize file watcher
     fileWatcher = new DmnFileWatcher(
         async () => await handleConfigChanged(),
         async () => await handleConfigDeleted()
     );
 
+    // Get the CLI logger to output diagnostics to the visible output channel
+    const logger = getCLILogger();
+
+    // Initialize CLI integration manager
+    try {
+        cliManager = new CLIIntegrationManager(context);
+        await cliManager.activate();
+        logger.info('CLI integration activated successfully');
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to activate CLI integration:', errorMsg);
+        // Continue with extension activation even if CLI integration fails
+    }
+
     // Check for dmn.json in workspace (or offer to create)
-    let dmnConfigPath = await findDmnConfig();
+    logger.info('========================================');
+    logger.info('    Daemon Initialization Start    ');
+    logger.info('========================================');
+    logger.info('Looking for dmn.json configuration...');
+    let dmnConfigPath: string | null = null;
+
+    try {
+        dmnConfigPath = await findDmnConfig();
+        logger.info(`findDmnConfig result: ${dmnConfigPath || 'NOT FOUND'}`);
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error('Error finding dmn.json:', errorMsg);
+    }
 
     if (!dmnConfigPath) {
-        // Offer to create dmn.json
-        dmnConfigPath = await ConfigWizard.detectAndOfferCreation();
+        logger.info('dmn.json not found, checking ConfigWizard...');
+        try {
+            // Offer to create dmn.json
+            dmnConfigPath = await ConfigWizard.detectAndOfferCreation();
+            logger.info(`ConfigWizard result: ${dmnConfigPath || 'NOT CREATED'}`);
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            logger.error('Error in ConfigWizard:', errorMsg);
+        }
     }
 
     if (dmnConfigPath) {
-        await initializeDaemon(dmnConfigPath);
+        logger.info(`Initializing daemon with config: ${dmnConfigPath}`);
+        try {
+            await initializeDaemon(dmnConfigPath);
+            logger.info('Daemon initialization complete');
+            logger.info('========================================');
+            logger.info('    Daemon Initialization COMPLETE    ');
+            logger.info('========================================');
+        } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            logger.error('Error initializing daemon:', errorMsg);
+            if (err instanceof Error && err.stack) {
+                logger.error('Stack trace:', err.stack);
+            }
+        }
+    } else {
+        logger.warn('No dmn.json found or created - services panel will be empty');
+        logger.info('========================================');
     }
 }
 
@@ -108,6 +232,12 @@ export async function deactivate() {
     // Log deactivation before disposing
     if (activityLogger) {
         activityLogger.log('Extension deactivated');
+    }
+
+    // Deactivate CLI integration
+    if (cliManager) {
+        await cliManager.deactivate();
+        cliManager = null;
     }
 
     // Stop periodic status refresh
@@ -154,7 +284,7 @@ export async function deactivate() {
  */
 async function initializeDaemon(dmnConfigPath: string): Promise<void> {
     console.log(`[OpenDaemon] Initializing with config: ${dmnConfigPath}`);
-    
+
     vscode.window.showInformationMessage(
         `OpenDaemon: Found configuration at ${path.basename(dmnConfigPath)}`
     );
@@ -195,7 +325,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
     // This is outside try/catch so tree view works even if daemon fails
     console.log('[OpenDaemon] Step 4: Loading services from config...');
     await loadServicesFromConfig(dmnConfigPath);
-    
+
     // Log tree view state after loading services
     const treeServices = treeDataProvider?.getAllServices() || [];
     console.log(`[OpenDaemon] Tree view now has ${treeServices.length} services: ${treeServices.map(s => s.name).join(', ')}`);
@@ -213,7 +343,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         console.log('[OpenDaemon] Step 6: Configuring terminal handlers...');
         if (commandManager && rpcClient) {
             const terminalManager = commandManager.getTerminalManager();
-            
+
             // Set up stdin writer for forwarding input to daemon
             terminalManager.setStdinWriter(async (serviceName: string, data: string) => {
                 if (rpcClient) {
@@ -224,7 +354,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                     }
                 }
             });
-            
+
             // Set up terminal close handler for two-way sync (close terminal -> stop service)
             terminalManager.setTerminalCloseHandler(async (serviceName: string) => {
                 if (rpcClient) {
@@ -232,14 +362,14 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                         if (activityLogger) {
                             activityLogger.logServiceAction(serviceName, 'Stopping service (terminal closed by user)');
                         }
-                        
+
                         await rpcClient.request('stopService', { service: serviceName });
-                        
+
                         // Update tree view status to NotStarted (since user closed terminal)
                         if (treeDataProvider) {
                             treeDataProvider.updateServiceStatus(serviceName, ServiceStatus.NotStarted);
                         }
-                        
+
                         if (activityLogger) {
                             activityLogger.logServiceAction(serviceName, 'Service stopped (terminal closed by user)');
                         }
@@ -254,7 +384,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                     }
                 }
             });
-            
+
             console.log('[OpenDaemon] Terminal handlers configured');
         }
 
@@ -264,7 +394,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         console.log('[OpenDaemon] Verifying loadServices() is called after daemon startup...');
         await loadServices();
         console.log('[OpenDaemon] Service status synchronization complete');
-        
+
         // Log final tree view state to verify synchronization
         const finalServices = treeDataProvider?.getAllServices() || [];
         console.log(`[OpenDaemon] Final tree view state after synchronization: ${finalServices.length} services`);
@@ -275,9 +405,9 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         } else {
             console.warn('[OpenDaemon] Warning: Tree view is empty after synchronization');
         }
-        
+
         console.log('[OpenDaemon] Initialization complete');
-        
+
         // Step 8: Start periodic status refresh as a fallback
         console.log('[OpenDaemon] Step 8: Starting periodic status refresh...');
         startPeriodicStatusRefresh();
@@ -306,7 +436,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
 async function handleConfigChanged(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
-    
+
     // Stop current daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -336,7 +466,7 @@ async function handleConfigChanged(): Promise<void> {
 async function handleConfigDeleted(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
-    
+
     // Stop daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -360,25 +490,36 @@ async function handleConfigDeleted(): Promise<void> {
 }
 
 /**
- * Find dmn.json in the workspace root
+ * Find dmn.json in any workspace folder root
  */
 async function findDmnConfig(): Promise<string | null> {
+    const logger = getCLILogger();
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
+    logger.info(`findDmnConfig: workspaceFolders count = ${workspaceFolders?.length ?? 0}`);
+
     if (!workspaceFolders || workspaceFolders.length === 0) {
+        logger.warn('findDmnConfig: No workspace folders found');
         return null;
     }
 
-    // Check first workspace folder for dmn.json
-    const rootPath = workspaceFolders[0].uri.fsPath;
-    const dmnPath = path.join(rootPath, 'dmn.json');
+    // Check all workspace folders for dmn.json
+    for (const folder of workspaceFolders) {
+        const dmnUri = vscode.Uri.joinPath(folder.uri, 'dmn.json');
+        logger.info(`findDmnConfig: Checking for ${dmnUri.fsPath}`);
 
-    try {
-        await fs.promises.access(dmnPath, fs.constants.F_OK);
-        return dmnPath;
-    } catch {
-        return null;
+        try {
+            await vscode.workspace.fs.stat(dmnUri);
+            logger.info(`findDmnConfig: Found dmn.json at ${dmnUri.fsPath}`);
+            return dmnUri.fsPath;
+        } catch (err) {
+            // File not found or error accessing
+            // Continue to next folder
+        }
     }
+
+    logger.info('findDmnConfig: dmn.json not found in any workspace folder');
+    return null;
 }
 
 /**
@@ -388,11 +529,11 @@ async function findDmnConfig(): Promise<string | null> {
 function startPeriodicStatusRefresh(): void {
     // Stop any existing interval first
     stopPeriodicStatusRefresh();
-    
+
     statusRefreshInterval = setInterval(async () => {
         await refreshStatusFromDaemon();
     }, STATUS_REFRESH_INTERVAL_MS);
-    
+
     if (activityLogger) {
         activityLogger.log(`Periodic status refresh started (interval: ${STATUS_REFRESH_INTERVAL_MS}ms)`);
     }
@@ -405,7 +546,8 @@ function stopPeriodicStatusRefresh(): void {
     if (statusRefreshInterval) {
         clearInterval(statusRefreshInterval);
         statusRefreshInterval = null;
-        
+        statusRefreshInFlight = false;
+
         if (activityLogger) {
             activityLogger.log('Periodic status refresh stopped');
         }
@@ -421,6 +563,12 @@ async function refreshStatusFromDaemon(): Promise<void> {
         return;
     }
 
+    // Prevent overlapping polling calls when daemon responses are slower than interval.
+    if (statusRefreshInFlight) {
+        return;
+    }
+
+    statusRefreshInFlight = true;
     try {
         const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
         const result = response.services;
@@ -438,7 +586,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
         const services = Object.entries(result).map(([name, statusStr]) => {
             const newStatus = parseServiceStatus(statusStr);
             const currentStatus = currentStatusMap.get(name);
-            
+
             if (currentStatus !== newStatus) {
                 hasChanges = true;
                 // Log status change detection from polling
@@ -446,7 +594,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
                     activityLogger.log(`[Status Refresh] ${name}: ${currentStatus} -> ${newStatus}`);
                 }
             }
-            
+
             return { name, status: newStatus };
         });
 
@@ -458,6 +606,8 @@ async function refreshStatusFromDaemon(): Promise<void> {
         // Silently ignore errors during background polling
         // The periodic refresh is a fallback, so we don't want to spam errors
         console.debug('[refreshStatusFromDaemon] Error during periodic refresh:', err);
+    } finally {
+        statusRefreshInFlight = false;
     }
 }
 
@@ -467,7 +617,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
  */
 async function loadServicesFromConfig(configPath: string): Promise<void> {
     console.log('[loadServicesFromConfig] Starting to load services from config:', configPath);
-    
+
     if (!treeDataProvider) {
         console.error('[loadServicesFromConfig] Tree data provider not initialized');
         return;
@@ -477,7 +627,11 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
 
     try {
         console.log('[loadServicesFromConfig] Reading config file...');
-        const configContent = await fs.promises.readFile(configPath, 'utf-8');
+        // Use workspace.fs instead of fs module for better compatibility
+        const configUri = vscode.Uri.file(configPath);
+        const configBuffer = await vscode.workspace.fs.readFile(configUri);
+        const configContent = new TextDecoder().decode(configBuffer);
+
         console.log('[loadServicesFromConfig] Config file read successfully, length:', configContent.length);
 
         console.log('[loadServicesFromConfig] Parsing JSON...');
@@ -487,11 +641,11 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         if (config.services) {
             const serviceNames = Object.keys(config.services);
             console.log('[loadServicesFromConfig] Found services object with', serviceNames.length, 'services');
-            
+
             if (serviceNames.length === 0) {
                 console.warn('[loadServicesFromConfig] Services object is empty');
                 treeDataProvider.updateServices([]);
-                
+
                 if (errorDisplayManager) {
                     await errorDisplayManager.displayError({
                         message: 'No services defined in dmn.json. The "services" object is empty.',
@@ -514,7 +668,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         } else {
             console.warn('[loadServicesFromConfig] No services object found in config');
             treeDataProvider.updateServices([]);
-            
+
             if (errorDisplayManager) {
                 await errorDisplayManager.displayError({
                     message: 'Missing "services" object in dmn.json',
@@ -525,23 +679,19 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         }
     } catch (err) {
         console.error('[loadServicesFromConfig] Failed to load services from config:', err);
-        
+
         // Build detailed error message based on error type
         let errorMessage = 'Failed to load services from dmn.json';
         let errorDetails = `Config file: ${configPath}\n\n`;
-        
+
         if (err instanceof SyntaxError) {
             console.error('[loadServicesFromConfig] JSON parsing error:', err.message);
             errorMessage = 'Invalid JSON in dmn.json';
             errorDetails += `JSON parsing error: ${err.message}\n\nPlease check that your configuration file contains valid JSON syntax.`;
-        } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-            console.error('[loadServicesFromConfig] Config file not found');
-            errorMessage = 'Configuration file not found';
-            errorDetails += 'The dmn.json file could not be found at the expected location.';
-        } else if ((err as NodeJS.ErrnoException).code === 'EACCES') {
-            console.error('[loadServicesFromConfig] Permission denied reading config file');
-            errorMessage = 'Permission denied reading dmn.json';
-            errorDetails += 'Unable to read the configuration file due to insufficient permissions.';
+        } else if (err instanceof vscode.FileSystemError) {
+            console.error('[loadServicesFromConfig] File system error:', err.message);
+            errorMessage = 'Error reading configuration file';
+            errorDetails += `File system error: ${err.message}`;
         } else if (err instanceof Error) {
             console.error('[loadServicesFromConfig] Error details:', {
                 name: err.name,
@@ -553,7 +703,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
             console.error('[loadServicesFromConfig] Unknown error type:', String(err));
             errorDetails += `Unknown error: ${String(err)}`;
         }
-        
+
         // Display error using error display manager
         if (errorDisplayManager) {
             await errorDisplayManager.displayError({
@@ -562,7 +712,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
                 details: errorDetails
             });
         }
-        
+
         // Clear tree view on error
         treeDataProvider.updateServices([]);
     }
@@ -573,7 +723,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
  */
 async function loadServices(): Promise<void> {
     console.log('[loadServices] Starting to load service statuses from daemon...');
-    
+
     if (!rpcClient) {
         console.error('[loadServices] RPC client not initialized - cannot load service statuses');
         return;
@@ -588,7 +738,7 @@ async function loadServices(): Promise<void> {
         console.log('[loadServices] Sending getStatus RPC request to daemon...');
         const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
         console.log('[loadServices] Received response from daemon:', JSON.stringify(response));
-        
+
         const result = response.services;
 
         if (!result || Object.keys(result).length === 0) {
@@ -604,12 +754,12 @@ async function loadServices(): Promise<void> {
 
         console.log('[loadServices] Updating tree view with', services.length, 'service statuses');
         treeDataProvider.updateServices(services);
-        
+
         // Log successful status updates for each service
         services.forEach(service => {
             console.log(`[loadServices] Successfully updated status for service "${service.name}": ${service.status}`);
         });
-        
+
         console.log('[loadServices] Service status synchronization complete');
     } catch (err) {
         console.error('[loadServices] Failed to load services from daemon:', err);
@@ -617,14 +767,14 @@ async function loadServices(): Promise<void> {
         // Provide detailed error information
         let errorMessage = 'Failed to load service status from daemon';
         let errorDetails = '';
-        
+
         if (err instanceof Error) {
             console.error('[loadServices] Error details:', {
                 name: err.name,
                 message: err.message,
                 stack: err.stack
             });
-            
+
             // Check for specific RPC error types
             if (err.message.includes('timeout')) {
                 errorMessage = 'Timeout while communicating with daemon';
@@ -662,7 +812,7 @@ async function loadServices(): Promise<void> {
 function parseServiceStatus(statusStr: string): ServiceStatus {
     // Normalize to lowercase for comparison
     const normalized = statusStr.toLowerCase();
-    
+
     // Handle failed status with exit code format: "failed (exit code: X)"
     if (normalized.startsWith('failed')) {
         return ServiceStatus.Failed;
@@ -736,6 +886,7 @@ function shouldLogLine(service: string): boolean {
  */
 function handleDaemonNotification(method: string, params: unknown): void {
     console.log('[Daemon notification]:', method, params);
+    const cliLogger = getCLILogger();
 
     try {
         // Log all notifications to activity channel
@@ -756,7 +907,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                     category: category as ErrorCategory
                 });
             }
-            
+
             // Log error notification
             if (activityLogger) {
                 activityLogger.logError('Daemon notification', message);
@@ -777,7 +928,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 parseServiceStatus(status),
                 exit_code
             );
-            
+
             // Log service status change
             if (activityLogger) {
                 const details = `new status: ${status}${exit_code !== undefined ? `, exit code: ${exit_code}` : ''}`;
@@ -789,7 +940,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
         if (method === 'serviceStarting' && treeDataProvider) {
             const { service } = params as { service: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Starting);
-            
+
             // Log service starting
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Starting');
@@ -800,7 +951,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
         if (method === 'serviceReady' && treeDataProvider) {
             const { service } = params as { service: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Running);
-            
+
             // Log service ready
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Ready');
@@ -817,7 +968,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 try {
                     const terminalManager = commandManager.getTerminalManager();
                     terminalManager.closeTerminal(service);
-                    
+
                     if (activityLogger) {
                         activityLogger.logTerminalAction(service, 'Terminal closed on service failure');
                     }
@@ -835,7 +986,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
             if (errorDisplayManager) {
                 errorDisplayManager.displayServiceFailure(service, error);
             }
-            
+
             // Log service failure
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Failed', error);
@@ -848,13 +999,13 @@ function handleDaemonNotification(method: string, params: unknown): void {
             // Use NotStarted instead of Stopped - from user's perspective, a stopped
             // service should appear the same as one that was never started
             treeDataProvider.updateServiceStatus(service, ServiceStatus.NotStarted);
-            
+
             // Close the terminal for this service (do this first to ensure cleanup)
             if (commandManager) {
                 try {
                     const terminalManager = commandManager.getTerminalManager();
                     terminalManager.closeTerminal(service);
-                    
+
                     if (activityLogger) {
                         activityLogger.logTerminalAction(service, 'Terminal closed on service stop');
                     }
@@ -867,7 +1018,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                     }
                 }
             }
-            
+
             // Log service stopped
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Stopped');
@@ -903,7 +1054,10 @@ function handleDaemonNotification(method: string, params: unknown): void {
             if (logManager) {
                 logManager.appendLogLine(service, logLine);
             }
-            
+
+            // Mirror realtime daemon service output to the OpenDaemon CLI channel.
+            cliLogger.logServiceOutput(service, logLine.timestamp, logLine.stream, content);
+
             // Log activity (throttled to avoid spam)
             if (activityLogger && shouldLogLine(service)) {
                 activityLogger.logTerminalAction(
@@ -916,14 +1070,14 @@ function handleDaemonNotification(method: string, params: unknown): void {
     } catch (err) {
         // Log notification processing errors
         const errorMsg = err instanceof Error ? err.message : String(err);
-        
+
         if (activityLogger) {
             activityLogger.logError(
                 `Processing notification ${method}`,
                 errorMsg
             );
         }
-        
+
         if (errorDisplayManager) {
             errorDisplayManager.displayError({
                 message: `Failed to process daemon notification: ${method}`,
@@ -931,7 +1085,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 details: errorMsg
             });
         }
-        
+
         console.error('[handleDaemonNotification] Error processing notification:', err);
     }
 }

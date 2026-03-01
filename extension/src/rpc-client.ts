@@ -28,6 +28,7 @@ export interface RpcNotification {
 }
 
 type PendingRequest = {
+    method: string;
     resolve: (result: unknown) => void;
     reject: (error: Error) => void;
     timeout: NodeJS.Timeout;
@@ -37,6 +38,8 @@ export class RpcClient extends EventEmitter {
     private nextId = 1;
     private pendingRequests = new Map<number, PendingRequest>();
     private readonly requestTimeout = 120000; // 120 seconds
+    // Buffer for partial JSON-RPC messages split across stdout chunks
+    private incomingBuffer = '';
 
     constructor(
         private readonly write: (data: string) => void,
@@ -82,7 +85,7 @@ export class RpcClient extends EventEmitter {
             }, this.requestTimeout);
 
             // Store pending request
-            this.pendingRequests.set(id, { resolve, reject, timeout });
+            this.pendingRequests.set(id, { method, resolve, reject, timeout });
 
             // Send request
             this.write(JSON.stringify(request) + '\n');
@@ -93,15 +96,36 @@ export class RpcClient extends EventEmitter {
      * Handle incoming data from daemon
      */
     handleData(data: string): void {
-        // Split by newlines in case multiple messages arrive together
-        const lines = data.split('\n').filter(line => line.trim());
+        // Append new chunk to the carry-over buffer. RPC messages are newline-delimited,
+        // but chunks can split messages arbitrarily.
+        this.incomingBuffer += data;
+        const lines = this.incomingBuffer.split('\n');
+        // Keep trailing partial line for the next chunk.
+        this.incomingBuffer = lines.pop() || '';
 
-        for (const line of lines) {
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) {
+                continue;
+            }
             try {
                 const message = JSON.parse(line);
                 this.handleMessage(message);
             } catch (err) {
                 console.error('Failed to parse RPC message:', err, 'Data:', line);
+            }
+        }
+
+        // Backward-compatible fallback: if daemon/client sends one complete JSON
+        // object without a trailing newline, process it immediately.
+        const trailing = this.incomingBuffer.trim();
+        if (trailing) {
+            try {
+                const message = JSON.parse(trailing);
+                this.handleMessage(message);
+                this.incomingBuffer = '';
+            } catch {
+                // Most likely an incomplete chunk; keep buffering.
             }
         }
     }
@@ -144,7 +168,7 @@ export class RpcClient extends EventEmitter {
         if (response.error) {
             if (this.activityLogger) {
                 this.activityLogger.logRpcAction(
-                    'unknown',
+                    pending.method,
                     'response',
                     `id: ${response.id}, error: ${JSON.stringify(response.error)}`
                 );
@@ -153,7 +177,7 @@ export class RpcClient extends EventEmitter {
         } else {
             if (this.activityLogger) {
                 this.activityLogger.logRpcAction(
-                    'unknown',
+                    pending.method,
                     'response',
                     `id: ${response.id}, success`
                 );
@@ -192,6 +216,7 @@ export class RpcClient extends EventEmitter {
             pending.reject(new Error('RPC client disposed'));
         }
         this.pendingRequests.clear();
+        this.incomingBuffer = '';
         this.removeAllListeners();
     }
 }

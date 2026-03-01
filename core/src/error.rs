@@ -7,35 +7,35 @@ pub enum DmnError {
     // Configuration errors
     #[error("Configuration error: {0}")]
     Config(#[from] ConfigError),
-    
+
     // Dependency graph errors
     #[error("Dependency graph error: {0}")]
     Graph(#[from] GraphError),
-    
+
     // Process management errors
     #[error("Process error: {0}")]
     Process(#[from] ProcessError),
-    
+
     // Ready watcher errors
     #[error("Ready watcher error: {0}")]
     Ready(#[from] ReadyError),
-    
+
     // Orchestrator errors
     #[error("Orchestrator error: {0}")]
     Orchestrator(#[from] OrchestratorError),
-    
+
     // MCP server errors
     #[error("MCP server error: {0}")]
     Mcp(#[from] McpError),
-    
+
     // RPC errors
     #[error("RPC error: {0}")]
     Rpc(#[from] RpcError),
-    
+
     // Generic IO errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     // JSON errors
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -46,28 +46,28 @@ pub enum DmnError {
 pub enum ConfigError {
     #[error("Failed to read configuration file: {0}")]
     ReadError(String),
-    
+
     #[error("Failed to parse configuration: {0}")]
     ParseError(String),
-    
+
     #[error("Configuration validation failed: {0}")]
     ValidationError(String),
-    
+
     #[error("Missing required field: {0}")]
     MissingField(String),
-    
+
     #[error("Invalid field value for '{field}': {reason}")]
     InvalidField { field: String, reason: String },
-    
+
     #[error("Environment file not found: {0}")]
     EnvFileNotFound(String),
-    
+
     #[error("Failed to parse environment file: {0}")]
     EnvFileParseError(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -77,13 +77,13 @@ pub enum ConfigError {
 pub enum GraphError {
     #[error("Cyclic dependency detected: {cycle}")]
     CyclicDependency { cycle: String },
-    
+
     #[error("Service '{service}' not found in configuration")]
     ServiceNotFound { service: String },
-    
+
     #[error("Service '{service}' depends on non-existent service '{dependency}'")]
     MissingDependency { service: String, dependency: String },
-    
+
     #[error("Failed to compute start order: {0}")]
     TopologicalSortError(String),
 }
@@ -93,28 +93,28 @@ pub enum GraphError {
 pub enum ProcessError {
     #[error("Failed to spawn service '{service}': {reason}")]
     SpawnError { service: String, reason: String },
-    
+
     #[error("Service '{service}' is already running")]
     AlreadyRunning { service: String },
-    
+
     #[error("Service '{service}' is not running")]
     NotRunning { service: String },
-    
+
     #[error("Service '{service}' not found")]
     ServiceNotFound { service: String },
-    
+
     #[error("Failed to parse command '{command}': {reason}")]
     CommandParseError { command: String, reason: String },
-    
+
     #[error("Service '{service}' failed to stop within timeout")]
     StopTimeout { service: String },
-    
+
     #[error("Service '{service}' exited with code {exit_code}")]
     ServiceFailed { service: String, exit_code: i32 },
-    
+
     #[error("Failed to read process output: {0}")]
     OutputReadError(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -130,19 +130,23 @@ pub enum ReadyError {
         details: String,
         troubleshooting: String,
     },
-    
+
     #[error("Invalid regex pattern for service '{service}': {pattern}")]
     InvalidRegex { service: String, pattern: String },
-    
+
     #[error("HTTP request failed for service '{service}' at URL '{url}': {reason}")]
-    HttpError { service: String, url: String, reason: String },
-    
+    HttpError {
+        service: String,
+        url: String,
+        reason: String,
+    },
+
     #[error("No log receiver provided for service '{0}'")]
     NoLogReceiver(String),
-    
+
     #[error("Regex error: {0}")]
     RegexError(#[from] regex::Error),
-    
+
     #[error("HTTP client error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 }
@@ -152,34 +156,34 @@ pub enum ReadyError {
 pub enum OrchestratorError {
     #[error("Failed to start service '{service}': {reason}")]
     StartError { service: String, reason: String },
-    
+
     #[error("Failed to stop service '{service}': {reason}")]
     StopError { service: String, reason: String },
-    
+
     #[error("Failed to restart service '{service}': {reason}")]
     RestartError { service: String, reason: String },
-    
+
     #[error("Service '{service}' not found in configuration")]
     ServiceNotFound { service: String },
-    
+
     #[error("Failed to start all services: {0}")]
     StartAllError(String),
-    
+
     #[error("Failed to stop all services: {0}")]
     StopAllError(String),
-    
+
     #[error("Dependency error: {0}")]
     DependencyError(String),
-    
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
-    
+
     #[error("Graph error: {0}")]
     GraphError(#[from] GraphError),
-    
+
     #[error("Process error: {0}")]
     ProcessError(#[from] ProcessError),
-    
+
     #[error("Ready error: {0}")]
     ReadyError(String),
 }
@@ -189,22 +193,22 @@ pub enum OrchestratorError {
 pub enum McpError {
     #[error("Service '{service}' not found")]
     ServiceNotFound { service: String },
-    
+
     #[error("Invalid parameter '{parameter}': {reason}")]
     InvalidParameter { parameter: String, reason: String },
-    
+
     #[error("Authentication required for this operation")]
     AuthenticationRequired,
-    
+
     #[error("Tool '{tool}' not found")]
     ToolNotFound { tool: String },
-    
+
     #[error("Failed to execute tool '{tool}': {reason}")]
     ToolExecutionError { tool: String, reason: String },
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -214,19 +218,19 @@ pub enum McpError {
 pub enum RpcError {
     #[error("Invalid RPC request: {0}")]
     InvalidRequest(String),
-    
+
     #[error("Method '{method}' not found")]
     MethodNotFound { method: String },
-    
+
     #[error("Invalid parameters for method '{method}': {reason}")]
     InvalidParams { method: String, reason: String },
-    
+
     #[error("Internal RPC error: {0}")]
     InternalError(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -246,7 +250,7 @@ impl DmnError {
             DmnError::Json(e) => format!("JSON Error: {}", e),
         }
     }
-    
+
     /// Get a short error category for logging
     pub fn category(&self) -> &'static str {
         match self {
@@ -261,7 +265,7 @@ impl DmnError {
             DmnError::Json(_) => "JSON",
         }
     }
-    
+
     /// Check if this is a recoverable error
     pub fn is_recoverable(&self) -> bool {
         match self {
@@ -319,7 +323,8 @@ mod tests {
             timeout_secs: 30,
             condition: "log_contains pattern: 'ready'".to_string(),
             details: "Last 2 log lines:\n  Starting database\n  Loading config\n".to_string(),
-            troubleshooting: "Troubleshooting:\n- Check the pattern\n- Increase timeout".to_string(),
+            troubleshooting: "Troubleshooting:\n- Check the pattern\n- Increase timeout"
+                .to_string(),
         };
         let err_str = err.to_string();
         assert!(err_str.contains("database"));
