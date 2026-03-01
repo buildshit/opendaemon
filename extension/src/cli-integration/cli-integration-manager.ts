@@ -37,13 +37,13 @@ export class CLIIntegrationManager {
     this.logger.info('========================================');
     this.logger.info('    CLI Integration Activation Start    ');
     this.logger.info('========================================');
-    
+
     try {
       // 1. Detect platform
       this.logger.info('Step 1: Detecting platform...');
       this.platform = detectPlatform();
       this.logger.info(`Platform detected: OS=${this.platform.os}, Arch=${this.platform.arch}`);
-      
+
       // 2. Resolve binary path
       this.logger.info('Step 2: Resolving binary path...');
       this.binaryInfo = resolveBinary(this.context.extensionPath, this.platform);
@@ -51,12 +51,12 @@ export class CLIIntegrationManager {
       this.logger.info(`  Name: ${this.binaryInfo.name}`);
       this.logger.info(`  Full path: ${this.binaryInfo.fullPath}`);
       this.logger.info(`  Bin directory: ${this.binaryInfo.binDir}`);
-      
+
       // 3. Verify binary exists and has permissions
       this.logger.info('Step 3: Verifying binary...');
       const verificationResult = await verifyBinary(this.binaryInfo.fullPath);
       this.logger.info(`Verification result:`, verificationResult);
-      
+
       // 4. Handle verification failures
       if (!verificationResult.exists) {
         const errorMsg = `CLI binary not found at: ${this.binaryInfo.fullPath}`;
@@ -66,15 +66,15 @@ export class CLIIntegrationManager {
         this.logger.show(); // Show output channel so user can see the error
         return; // Return early, disable terminal integration
       }
-      
+
       this.logger.info('Binary exists: YES');
-      
+
       if (!verificationResult.hasPermissions) {
         this.logger.warn('Binary lacks execute permissions, attempting to fix...');
-        
+
         // Attempt to fix permissions
         const fixed = await fixPermissions(this.binaryInfo.fullPath);
-        
+
         if (!fixed) {
           const errorMsg = `Failed to set execute permissions. Please run: chmod +x ${this.binaryInfo.fullPath}`;
           this.logger.error(errorMsg);
@@ -82,24 +82,35 @@ export class CLIIntegrationManager {
           this.logger.show();
           return; // Return early, disable terminal integration
         }
-        
+
         this.logger.info('Execute permissions set successfully');
       } else {
         this.logger.info('Binary has execute permissions: YES');
       }
-      
+
       // 5. Initialize TerminalInterceptor with bin directory
       this.logger.info('Step 4: Initializing TerminalInterceptor...');
       this.interceptor = new TerminalInterceptor(this.binaryInfo.binDir);
-      
+
       // 6. Start intercepting terminals (register profile)
       this.logger.info('Step 5: Starting terminal interceptor...');
       await this.interceptor.start();
-      
+
       // 7. Show first-time notification if applicable
       this.logger.info('Step 6: Showing first-time notification (if applicable)...');
-      await this.notificationManager.showFirstTimeNotification(this.binaryInfo.binDir);
-      
+
+      // Use setTimeout to completely decouple the notification from the activation flow
+      // This ensures that even if the notification logic has synchronous blocks or locks,
+      // it won't prevent the extension from finishing activation.
+      setTimeout(() => {
+        this.logger.info('Executing scheduled notification check...');
+        this.notificationManager.showFirstTimeNotification(this.binaryInfo!.binDir).catch(err => {
+          this.logger.error(`Failed to show notification: ${err}`);
+        });
+      }, 1000);
+
+      this.logger.info('Notification check scheduled asynchronously');
+
       this.logger.info('========================================');
       this.logger.info('  CLI Integration Activation COMPLETE   ');
       this.logger.info('========================================');
@@ -110,7 +121,7 @@ export class CLIIntegrationManager {
       this.logger.info('1. Open a NEW terminal (existing terminals won\'t have the updated PATH)');
       this.logger.info('2. Run: dmn --version');
       this.logger.info('');
-      
+
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error('========================================');
@@ -134,7 +145,7 @@ export class CLIIntegrationManager {
     if (!this.interceptor) {
       throw new Error('CLI integration not activated. Cannot create terminal with CLI.');
     }
-    
+
     return this.interceptor.createTerminalWithCLI(name);
   }
 
@@ -148,7 +159,7 @@ export class CLIIntegrationManager {
       );
       return;
     }
-    
+
     await this.notificationManager.showGlobalInstallInstructions(
       this.platform,
       this.binaryInfo.binDir
@@ -165,7 +176,7 @@ export class CLIIntegrationManager {
       );
       return;
     }
-    
+
     await this.notificationManager.showCLIInfoNotification(this.binaryInfo.binDir);
   }
 
@@ -178,17 +189,17 @@ export class CLIIntegrationManager {
       this.logger.show();
       return;
     }
-    
+
     const diagnostics = await this.interceptor.runDiagnostics();
-    
+
     // Log all diagnostics
     for (const line of diagnostics) {
       this.logger.info(line);
     }
-    
+
     // Show output channel
     this.logger.show();
-    
+
     // Also show a notification
     vscode.window.showInformationMessage(
       'CLI diagnostics complete. Check the "OpenDaemon CLI" output channel for details.',
@@ -208,7 +219,7 @@ export class CLIIntegrationManager {
       await this.interceptor.stop();
       this.interceptor = null;
     }
-    
+
     console.log(`[OpenDaemon CLI] Integration deactivated`);
   }
 }

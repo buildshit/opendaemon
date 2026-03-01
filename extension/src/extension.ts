@@ -165,7 +165,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Get the CLI logger to output diagnostics to the visible output channel
     const logger = getCLILogger();
-    
+
     // Initialize CLI integration manager
     try {
         cliManager = new CLIIntegrationManager(context);
@@ -183,7 +183,7 @@ export async function activate(context: vscode.ExtensionContext) {
     logger.info('========================================');
     logger.info('Looking for dmn.json configuration...');
     let dmnConfigPath: string | null = null;
-    
+
     try {
         dmnConfigPath = await findDmnConfig();
         logger.info(`findDmnConfig result: ${dmnConfigPath || 'NOT FOUND'}`);
@@ -283,7 +283,7 @@ export async function deactivate() {
  */
 async function initializeDaemon(dmnConfigPath: string): Promise<void> {
     console.log(`[OpenDaemon] Initializing with config: ${dmnConfigPath}`);
-    
+
     vscode.window.showInformationMessage(
         `OpenDaemon: Found configuration at ${path.basename(dmnConfigPath)}`
     );
@@ -324,7 +324,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
     // This is outside try/catch so tree view works even if daemon fails
     console.log('[OpenDaemon] Step 4: Loading services from config...');
     await loadServicesFromConfig(dmnConfigPath);
-    
+
     // Log tree view state after loading services
     const treeServices = treeDataProvider?.getAllServices() || [];
     console.log(`[OpenDaemon] Tree view now has ${treeServices.length} services: ${treeServices.map(s => s.name).join(', ')}`);
@@ -342,7 +342,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         console.log('[OpenDaemon] Step 6: Configuring terminal handlers...');
         if (commandManager && rpcClient) {
             const terminalManager = commandManager.getTerminalManager();
-            
+
             // Set up stdin writer for forwarding input to daemon
             terminalManager.setStdinWriter(async (serviceName: string, data: string) => {
                 if (rpcClient) {
@@ -353,7 +353,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                     }
                 }
             });
-            
+
             // Set up terminal close handler for two-way sync (close terminal -> stop service)
             terminalManager.setTerminalCloseHandler(async (serviceName: string) => {
                 if (rpcClient) {
@@ -361,14 +361,14 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                         if (activityLogger) {
                             activityLogger.logServiceAction(serviceName, 'Stopping service (terminal closed by user)');
                         }
-                        
+
                         await rpcClient.request('stopService', { service: serviceName });
-                        
+
                         // Update tree view status to NotStarted (since user closed terminal)
                         if (treeDataProvider) {
                             treeDataProvider.updateServiceStatus(serviceName, ServiceStatus.NotStarted);
                         }
-                        
+
                         if (activityLogger) {
                             activityLogger.logServiceAction(serviceName, 'Service stopped (terminal closed by user)');
                         }
@@ -383,7 +383,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
                     }
                 }
             });
-            
+
             console.log('[OpenDaemon] Terminal handlers configured');
         }
 
@@ -393,7 +393,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         console.log('[OpenDaemon] Verifying loadServices() is called after daemon startup...');
         await loadServices();
         console.log('[OpenDaemon] Service status synchronization complete');
-        
+
         // Log final tree view state to verify synchronization
         const finalServices = treeDataProvider?.getAllServices() || [];
         console.log(`[OpenDaemon] Final tree view state after synchronization: ${finalServices.length} services`);
@@ -404,9 +404,9 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
         } else {
             console.warn('[OpenDaemon] Warning: Tree view is empty after synchronization');
         }
-        
+
         console.log('[OpenDaemon] Initialization complete');
-        
+
         // Step 8: Start periodic status refresh as a fallback
         console.log('[OpenDaemon] Step 8: Starting periodic status refresh...');
         startPeriodicStatusRefresh();
@@ -435,7 +435,7 @@ async function initializeDaemon(dmnConfigPath: string): Promise<void> {
 async function handleConfigChanged(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
-    
+
     // Stop current daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -465,7 +465,7 @@ async function handleConfigChanged(): Promise<void> {
 async function handleConfigDeleted(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
-    
+
     // Stop daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -489,33 +489,36 @@ async function handleConfigDeleted(): Promise<void> {
 }
 
 /**
- * Find dmn.json in the workspace root
+ * Find dmn.json in any workspace folder root
  */
 async function findDmnConfig(): Promise<string | null> {
     const logger = getCLILogger();
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
     logger.info(`findDmnConfig: workspaceFolders count = ${workspaceFolders?.length ?? 0}`);
-    
+
     if (!workspaceFolders || workspaceFolders.length === 0) {
         logger.warn('findDmnConfig: No workspace folders found');
         return null;
     }
 
-    // Check first workspace folder for dmn.json
-    const rootPath = workspaceFolders[0].uri.fsPath;
-    const dmnPath = path.join(rootPath, 'dmn.json');
-    
-    logger.info(`findDmnConfig: Checking for ${dmnPath}`);
+    // Check all workspace folders for dmn.json
+    for (const folder of workspaceFolders) {
+        const dmnUri = vscode.Uri.joinPath(folder.uri, 'dmn.json');
+        logger.info(`findDmnConfig: Checking for ${dmnUri.fsPath}`);
 
-    try {
-        await fs.promises.access(dmnPath, fs.constants.F_OK);
-        logger.info(`findDmnConfig: Found dmn.json at ${dmnPath}`);
-        return dmnPath;
-    } catch (err) {
-        logger.info(`findDmnConfig: dmn.json not found at ${dmnPath}`);
-        return null;
+        try {
+            await vscode.workspace.fs.stat(dmnUri);
+            logger.info(`findDmnConfig: Found dmn.json at ${dmnUri.fsPath}`);
+            return dmnUri.fsPath;
+        } catch (err) {
+            // File not found or error accessing
+            // Continue to next folder
+        }
     }
+
+    logger.info('findDmnConfig: dmn.json not found in any workspace folder');
+    return null;
 }
 
 /**
@@ -525,11 +528,11 @@ async function findDmnConfig(): Promise<string | null> {
 function startPeriodicStatusRefresh(): void {
     // Stop any existing interval first
     stopPeriodicStatusRefresh();
-    
+
     statusRefreshInterval = setInterval(async () => {
         await refreshStatusFromDaemon();
     }, STATUS_REFRESH_INTERVAL_MS);
-    
+
     if (activityLogger) {
         activityLogger.log(`Periodic status refresh started (interval: ${STATUS_REFRESH_INTERVAL_MS}ms)`);
     }
@@ -542,7 +545,7 @@ function stopPeriodicStatusRefresh(): void {
     if (statusRefreshInterval) {
         clearInterval(statusRefreshInterval);
         statusRefreshInterval = null;
-        
+
         if (activityLogger) {
             activityLogger.log('Periodic status refresh stopped');
         }
@@ -575,7 +578,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
         const services = Object.entries(result).map(([name, statusStr]) => {
             const newStatus = parseServiceStatus(statusStr);
             const currentStatus = currentStatusMap.get(name);
-            
+
             if (currentStatus !== newStatus) {
                 hasChanges = true;
                 // Log status change detection from polling
@@ -583,7 +586,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
                     activityLogger.log(`[Status Refresh] ${name}: ${currentStatus} -> ${newStatus}`);
                 }
             }
-            
+
             return { name, status: newStatus };
         });
 
@@ -604,7 +607,7 @@ async function refreshStatusFromDaemon(): Promise<void> {
  */
 async function loadServicesFromConfig(configPath: string): Promise<void> {
     console.log('[loadServicesFromConfig] Starting to load services from config:', configPath);
-    
+
     if (!treeDataProvider) {
         console.error('[loadServicesFromConfig] Tree data provider not initialized');
         return;
@@ -614,7 +617,11 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
 
     try {
         console.log('[loadServicesFromConfig] Reading config file...');
-        const configContent = await fs.promises.readFile(configPath, 'utf-8');
+        // Use workspace.fs instead of fs module for better compatibility
+        const configUri = vscode.Uri.file(configPath);
+        const configBuffer = await vscode.workspace.fs.readFile(configUri);
+        const configContent = new TextDecoder().decode(configBuffer);
+
         console.log('[loadServicesFromConfig] Config file read successfully, length:', configContent.length);
 
         console.log('[loadServicesFromConfig] Parsing JSON...');
@@ -624,11 +631,11 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         if (config.services) {
             const serviceNames = Object.keys(config.services);
             console.log('[loadServicesFromConfig] Found services object with', serviceNames.length, 'services');
-            
+
             if (serviceNames.length === 0) {
                 console.warn('[loadServicesFromConfig] Services object is empty');
                 treeDataProvider.updateServices([]);
-                
+
                 if (errorDisplayManager) {
                     await errorDisplayManager.displayError({
                         message: 'No services defined in dmn.json. The "services" object is empty.',
@@ -651,7 +658,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         } else {
             console.warn('[loadServicesFromConfig] No services object found in config');
             treeDataProvider.updateServices([]);
-            
+
             if (errorDisplayManager) {
                 await errorDisplayManager.displayError({
                     message: 'Missing "services" object in dmn.json',
@@ -662,23 +669,19 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
         }
     } catch (err) {
         console.error('[loadServicesFromConfig] Failed to load services from config:', err);
-        
+
         // Build detailed error message based on error type
         let errorMessage = 'Failed to load services from dmn.json';
         let errorDetails = `Config file: ${configPath}\n\n`;
-        
+
         if (err instanceof SyntaxError) {
             console.error('[loadServicesFromConfig] JSON parsing error:', err.message);
             errorMessage = 'Invalid JSON in dmn.json';
             errorDetails += `JSON parsing error: ${err.message}\n\nPlease check that your configuration file contains valid JSON syntax.`;
-        } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-            console.error('[loadServicesFromConfig] Config file not found');
-            errorMessage = 'Configuration file not found';
-            errorDetails += 'The dmn.json file could not be found at the expected location.';
-        } else if ((err as NodeJS.ErrnoException).code === 'EACCES') {
-            console.error('[loadServicesFromConfig] Permission denied reading config file');
-            errorMessage = 'Permission denied reading dmn.json';
-            errorDetails += 'Unable to read the configuration file due to insufficient permissions.';
+        } else if (err instanceof vscode.FileSystemError) {
+            console.error('[loadServicesFromConfig] File system error:', err.message);
+            errorMessage = 'Error reading configuration file';
+            errorDetails += `File system error: ${err.message}`;
         } else if (err instanceof Error) {
             console.error('[loadServicesFromConfig] Error details:', {
                 name: err.name,
@@ -690,7 +693,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
             console.error('[loadServicesFromConfig] Unknown error type:', String(err));
             errorDetails += `Unknown error: ${String(err)}`;
         }
-        
+
         // Display error using error display manager
         if (errorDisplayManager) {
             await errorDisplayManager.displayError({
@@ -699,7 +702,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
                 details: errorDetails
             });
         }
-        
+
         // Clear tree view on error
         treeDataProvider.updateServices([]);
     }
@@ -710,7 +713,7 @@ async function loadServicesFromConfig(configPath: string): Promise<void> {
  */
 async function loadServices(): Promise<void> {
     console.log('[loadServices] Starting to load service statuses from daemon...');
-    
+
     if (!rpcClient) {
         console.error('[loadServices] RPC client not initialized - cannot load service statuses');
         return;
@@ -725,7 +728,7 @@ async function loadServices(): Promise<void> {
         console.log('[loadServices] Sending getStatus RPC request to daemon...');
         const response = await rpcClient.request('getStatus') as { services: Record<string, string> };
         console.log('[loadServices] Received response from daemon:', JSON.stringify(response));
-        
+
         const result = response.services;
 
         if (!result || Object.keys(result).length === 0) {
@@ -741,12 +744,12 @@ async function loadServices(): Promise<void> {
 
         console.log('[loadServices] Updating tree view with', services.length, 'service statuses');
         treeDataProvider.updateServices(services);
-        
+
         // Log successful status updates for each service
         services.forEach(service => {
             console.log(`[loadServices] Successfully updated status for service "${service.name}": ${service.status}`);
         });
-        
+
         console.log('[loadServices] Service status synchronization complete');
     } catch (err) {
         console.error('[loadServices] Failed to load services from daemon:', err);
@@ -754,14 +757,14 @@ async function loadServices(): Promise<void> {
         // Provide detailed error information
         let errorMessage = 'Failed to load service status from daemon';
         let errorDetails = '';
-        
+
         if (err instanceof Error) {
             console.error('[loadServices] Error details:', {
                 name: err.name,
                 message: err.message,
                 stack: err.stack
             });
-            
+
             // Check for specific RPC error types
             if (err.message.includes('timeout')) {
                 errorMessage = 'Timeout while communicating with daemon';
@@ -799,7 +802,7 @@ async function loadServices(): Promise<void> {
 function parseServiceStatus(statusStr: string): ServiceStatus {
     // Normalize to lowercase for comparison
     const normalized = statusStr.toLowerCase();
-    
+
     // Handle failed status with exit code format: "failed (exit code: X)"
     if (normalized.startsWith('failed')) {
         return ServiceStatus.Failed;
@@ -893,7 +896,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                     category: category as ErrorCategory
                 });
             }
-            
+
             // Log error notification
             if (activityLogger) {
                 activityLogger.logError('Daemon notification', message);
@@ -914,7 +917,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 parseServiceStatus(status),
                 exit_code
             );
-            
+
             // Log service status change
             if (activityLogger) {
                 const details = `new status: ${status}${exit_code !== undefined ? `, exit code: ${exit_code}` : ''}`;
@@ -926,7 +929,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
         if (method === 'serviceStarting' && treeDataProvider) {
             const { service } = params as { service: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Starting);
-            
+
             // Log service starting
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Starting');
@@ -937,7 +940,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
         if (method === 'serviceReady' && treeDataProvider) {
             const { service } = params as { service: string };
             treeDataProvider.updateServiceStatus(service, ServiceStatus.Running);
-            
+
             // Log service ready
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Ready');
@@ -954,7 +957,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 try {
                     const terminalManager = commandManager.getTerminalManager();
                     terminalManager.closeTerminal(service);
-                    
+
                     if (activityLogger) {
                         activityLogger.logTerminalAction(service, 'Terminal closed on service failure');
                     }
@@ -972,7 +975,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
             if (errorDisplayManager) {
                 errorDisplayManager.displayServiceFailure(service, error);
             }
-            
+
             // Log service failure
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Failed', error);
@@ -985,13 +988,13 @@ function handleDaemonNotification(method: string, params: unknown): void {
             // Use NotStarted instead of Stopped - from user's perspective, a stopped
             // service should appear the same as one that was never started
             treeDataProvider.updateServiceStatus(service, ServiceStatus.NotStarted);
-            
+
             // Close the terminal for this service (do this first to ensure cleanup)
             if (commandManager) {
                 try {
                     const terminalManager = commandManager.getTerminalManager();
                     terminalManager.closeTerminal(service);
-                    
+
                     if (activityLogger) {
                         activityLogger.logTerminalAction(service, 'Terminal closed on service stop');
                     }
@@ -1004,7 +1007,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                     }
                 }
             }
-            
+
             // Log service stopped
             if (activityLogger) {
                 activityLogger.logServiceAction(service, 'Stopped');
@@ -1040,7 +1043,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
             if (logManager) {
                 logManager.appendLogLine(service, logLine);
             }
-            
+
             // Log activity (throttled to avoid spam)
             if (activityLogger && shouldLogLine(service)) {
                 activityLogger.logTerminalAction(
@@ -1053,14 +1056,14 @@ function handleDaemonNotification(method: string, params: unknown): void {
     } catch (err) {
         // Log notification processing errors
         const errorMsg = err instanceof Error ? err.message : String(err);
-        
+
         if (activityLogger) {
             activityLogger.logError(
                 `Processing notification ${method}`,
                 errorMsg
             );
         }
-        
+
         if (errorDisplayManager) {
             errorDisplayManager.displayError({
                 message: `Failed to process daemon notification: ${method}`,
@@ -1068,7 +1071,7 @@ function handleDaemonNotification(method: string, params: unknown): void {
                 details: errorMsg
             });
         }
-        
+
         console.error('[handleDaemonNotification] Error processing notification:', err);
     }
 }

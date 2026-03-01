@@ -15,7 +15,8 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:dmn.json"
+    "workspaceContains:dmn.json",
+    "onView:opendaemon.services"
   ],
   "main": "./out/extension.js",
   "contributes": {
