@@ -22,6 +22,17 @@ OpenDaemon (`dmn`) is a command-line tool for orchestrating local development se
 - **Direct Commands**: Start/stop/restart/status with shared daemon routing
 - **Interactive Mode**: Via VS Code extension UI
 
+## Confirmed Working Snapshot (2026-03-01)
+
+Validated from a real workspace terminal session:
+
+- `dmn start frontend` → `Service 'frontend' start requested via extension daemon.`
+- `dmn stop` → `Stop requested via extension daemon.`
+- `dmn start` → `Start requested via extension daemon.`
+- `dmn start database` → `Service 'database' start requested via extension daemon.`
+- `dmn restart database` → `Restart requested via extension daemon.`
+- `dmn status` → header shows `Controller: extension-daemon` and live service states
+
 ## Installation & Setup
 
 ### Prerequisites
@@ -321,6 +332,9 @@ Display version information.
 ```bash
 dmn --version
 ```
+
+**Alias:** `dmn -V`  
+**Note:** lowercase `dmn -v` is not a valid flag.
 
 **Output**:
 ```

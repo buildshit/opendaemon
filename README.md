@@ -106,6 +106,10 @@ CLI commands (`start`, `stop`, `restart`, `status`) now target the same daemon u
 
 If no extension daemon is available, `dmn` falls back to the local foreground supervisor mode (`dmn start` holds the terminal open, and other CLI commands communicate through `.dmn/runtime-*.json` files).
 
+Validated flow in terminal (2026-03-01): `dmn start frontend`, `dmn stop`, `dmn start`, `dmn stop`, `dmn start database`, `dmn restart database`, and `dmn status` all worked as expected with live state reflected from the active controller.
+
+Version flags are `--version` / `-V` (lowercase `-v` is not supported).
+
 **📚 Learn more:** [CLI Integration Guide](extension/docs/cli-integration.md)
 
 ### Terminal CLI Integration

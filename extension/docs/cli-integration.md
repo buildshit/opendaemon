@@ -204,6 +204,23 @@ dmn mcp [--check]
 
 ---
 
+### Confirmed Working Session (2026-03-01)
+
+Validated in a real Cursor terminal session:
+
+- `dmn start frontend` returned `Service 'frontend' start requested via extension daemon.`
+- `dmn stop` returned `Stop requested via extension daemon.`
+- `dmn start` returned `Start requested via extension daemon.`
+- `dmn start database` and `dmn restart database` both succeeded via extension daemon routing
+- `dmn status` reported `Controller: extension-daemon` and current service states
+
+Version flag behavior in this validated session:
+
+- `dmn -V` works
+- `dmn -v` is invalid (expected Clap behavior)
+
+---
+
 ### Command Options
 
 All commands support the `--config` option to specify a custom configuration file:
