@@ -8,6 +8,7 @@ on:
       - extension/package.json
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -62,7 +63,16 @@ jobs:
         run: |
           git tag "${TAG_NAME}"
           git push origin "${TAG_NAME}"
-          echo "Created tag ${TAG_NAME}; extension-release workflow will publish and create GitHub release."
+          echo "Created tag ${TAG_NAME}."
+
+      - name: Trigger extension-release for tag
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          gh workflow run extension-release.yml --ref "${TAG_NAME}" -f publish=true
+          echo "Triggered extension-release workflow for ${TAG_NAME}."
 
       - name: Skip when version tag exists
         if: steps.tag_check.outputs.exists == 'true'
