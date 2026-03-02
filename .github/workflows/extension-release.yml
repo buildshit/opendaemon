@@ -104,6 +104,9 @@ jobs:
           chmod +x dist/dmn-darwin-x64
           chmod +x dist/dmn-darwin-arm64
 
+      - name: Remove stale VSIX files
+        run: rm -f dist/*.vsix
+
       - name: Package extension
         run: bash ./scripts/package-extension.sh
 
@@ -150,12 +153,14 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          VSIX_PATH="$(ls dist/*.vsix | head -n 1)"
+          VSIX_PATH="$(ls -t dist/*.vsix | head -n 1)"
+          echo "Publishing VSIX: $VSIX_PATH"
           vsce publish --packagePath "$VSIX_PATH" -p "$VSCE_PAT"
 
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          VSIX_PATH="$(ls dist/*.vsix | head -n 1)"
+          VSIX_PATH="$(ls -t dist/*.vsix | head -n 1)"
+          echo "Publishing VSIX: $VSIX_PATH"
           ovsx publish "$VSIX_PATH" -p "$OVSX_PAT"

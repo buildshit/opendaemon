@@ -50,6 +50,8 @@ gh release create v<version> dist/opendaemon-<version>.vsix \
 
 This gives users a direct installable package even if they do not use a marketplace.
 
+Workflow note: release automation removes stale `dist/*.vsix` files before packaging and always publishes the newest VSIX artifact.
+
 ## One-Time Marketplace Setup
 
 Before first publish:
