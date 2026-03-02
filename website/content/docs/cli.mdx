@@ -1,13 +1,18 @@
-# OpenDaemon CLI Guide
+---
+title: CLI Guide
+description: Command reference, status model, and operational patterns for dmn.
+---
 
 The `dmn` CLI manages services defined in `dmn.json`.
 
-Runtime behavior:
+## Runtime behavior
 
 - If an extension daemon is running for the same config, CLI commands route to it.
 - Otherwise, commands use the local CLI supervisor runtime.
 
-## Command Reference
+See [Runtime Model](/docs/runtime-model) for details.
+
+## Command reference
 
 | Command | Purpose |
 | --- | --- |
@@ -23,29 +28,29 @@ Runtime behavior:
 
 All service commands support `-c, --config <path>` and default to `dmn.json`.
 
-## Common Usage
+## Common usage
 
 ```bash
-# Start everything
+# start everything
 dmn start
 
-# Start one service + dependencies
+# start one service + dependencies
 dmn start frontend
 
-# Check all statuses
+# check all statuses
 dmn status
 
-# Check one service status
+# check one service status
 dmn status frontend
 
-# Restart one service
+# restart one service
 dmn restart frontend
 
-# Stop everything
+# stop everything
 dmn stop
 ```
 
-## Status Values
+## Status values
 
 - `Not Started`
 - `Starting`
@@ -53,7 +58,7 @@ dmn stop
 - `Stopped`
 - `Failed (exit code: N)`
 
-## Config Path Best Practice
+## Config path best practice
 
 Use an absolute config path when commands run outside your workspace shell:
 
@@ -61,14 +66,8 @@ Use an absolute config path when commands run outside your workspace shell:
 dmn start --config /absolute/path/to/dmn.json
 ```
 
-## Troubleshooting
+## CLI troubleshooting
 
 - `No dmn.json found`: pass `--config` or run in the correct folder.
-- Command not routing to extension daemon: confirm extension is open on the same workspace/config.
+- Not routing to extension daemon: confirm extension is open on the same workspace/config.
 - Service stuck in `Starting`: verify `ready_when` pattern/URL and timeout values.
-
-## Related Docs
-
-- [Project README](README.md)
-- [Extension Guide](extension/README.md)
-- [MCP Guide](MCP.md)

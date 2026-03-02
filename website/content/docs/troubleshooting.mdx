@@ -1,0 +1,70 @@
+---
+title: Troubleshooting
+description: Diagnose common OpenDaemon setup and runtime issues.
+---
+
+Use this checklist when CLI, extension, or MCP behavior does not match
+expectations.
+
+## Configuration issues
+
+### `No dmn.json found`
+
+- Confirm you are in the correct workspace directory, or
+- Pass an explicit absolute path:
+
+```bash
+dmn status --config /absolute/path/to/dmn.json
+```
+
+### Services never leave `Starting`
+
+- Verify `ready_when` values (`type`, `pattern`, `url`, `timeout_seconds`)
+- Confirm readiness endpoints are reachable from your current environment
+- Check service logs for startup errors
+
+## Runtime mismatch issues
+
+### CLI, extension, and MCP show different state
+
+- Confirm all surfaces target the same absolute config path
+- If needed, restart extension and client to re-establish runtime routing
+- Review [Runtime Model](/docs/runtime-model) behavior
+
+## CLI and extension issues
+
+### Extension terminal does not find `dmn`
+
+- Open a **new** integrated terminal after extension activation
+- Run `OpenDaemon: Run CLI Diagnostics`
+- Check `OpenDaemon: Show CLI Logs` for setup details
+
+## MCP issues
+
+### MCP client cannot start OpenDaemon server
+
+- Ensure `dmn` is in PATH, or provide an absolute binary path
+- Validate config first:
+
+```bash
+dmn mcp --check --config /absolute/path/to/dmn.json
+```
+
+### MCP returns no services
+
+- Verify `--config` points to the intended workspace config
+- Confirm the file has a valid `services` object
+
+### MCP actions appear to do nothing
+
+- Service may already be in desired state
+- Try `restart_service` and inspect logs with `read_logs`
+
+## Still blocked?
+
+Collect the following before reporting an issue:
+
+- CLI command + full output
+- Config path used (`--config`)
+- Current status output (`dmn status`)
+- Relevant service logs

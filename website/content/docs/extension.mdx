@@ -1,6 +1,10 @@
-# OpenDaemon VS Code Extension
+---
+title: VS Code Extension
+description: Use the OpenDaemon extension to manage services visually.
+---
 
-The extension provides visual service orchestration for the same OpenDaemon runtime used by the CLI and MCP server.
+The extension provides visual orchestration for the same OpenDaemon runtime used
+by the CLI and MCP server.
 
 ## Features
 
@@ -11,7 +15,7 @@ The extension provides visual service orchestration for the same OpenDaemon runt
 - Automatic CLI availability in new integrated terminals
 - Config creation flow when `dmn.json` is missing
 
-## Command Palette
+## Command palette actions
 
 Use `OpenDaemon: ...` commands, including:
 
@@ -26,47 +30,23 @@ Use `OpenDaemon: ...` commands, including:
 - `Show CLI Logs`
 - `Run CLI Diagnostics`
 
-## Usage
+## Typical workflow
 
 1. Open a workspace that contains `dmn.json`.
 2. Open the `OpenDaemon Services` view.
-3. Start services from the view title buttons or service context menu.
-4. Inspect logs and terminals while services run.
+3. Start services from view title buttons or per-service context menus.
+4. Use logs and service terminals while services run.
 
-## Development
+## Runtime integration
 
-```bash
-cd extension
-npm install
-npm run compile
-npm test
-```
+The extension daemon can become the shared runtime endpoint for both CLI and MCP
+calls that target the same config path. This keeps status and logs consistent
+across interfaces.
 
-For watch mode:
-
-```bash
-cd extension
-npm run watch
-```
-
-## Packaging and Install (Windows Maintainer Loop)
-
-From repo root:
-
-```powershell
-.\scripts\package-and-install-extension.ps1
-```
-
-This runs quick packaging and installs the generated VSIX into your editor.
+See [Runtime Model](/docs/runtime-model) for routing behavior.
 
 ## Troubleshooting
 
 - Open a **new** integrated terminal after activation to get injected CLI PATH changes.
 - Use `OpenDaemon: Show CLI Logs` for integration diagnostics.
 - Use `OpenDaemon: Run CLI Diagnostics` to verify binary path and terminal env setup.
-
-## Related Docs
-
-- [Project README](../README.md)
-- [CLI Guide](../CLI.md)
-- [MCP Guide](../MCP.md)

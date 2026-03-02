@@ -1,0 +1,70 @@
+---
+title: Getting Started
+description: Install OpenDaemon, create your first config, and run services.
+---
+
+This guide gets you from zero to a running OpenDaemon workflow.
+
+## 1) Prerequisites
+
+- OpenDaemon CLI (`dmn`) installed and available on your PATH
+- A project workspace where you want to orchestrate local services
+- Optional: the OpenDaemon VS Code extension for a visual workflow
+
+## 2) Create `dmn.json`
+
+Create a `dmn.json` file in your workspace root:
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "database system is ready to accept connections",
+        "timeout_seconds": 120
+      }
+    },
+    "backend": {
+      "command": "npm run dev",
+      "depends_on": ["database"],
+      "ready_when": {
+        "type": "url_responds",
+        "url": "http://localhost:3000/health"
+      },
+      "env_file": ".env.local"
+    }
+  }
+}
+```
+
+## 3) Run your services
+
+```bash
+# start all services
+dmn start
+
+# inspect current state
+dmn status
+
+# stop all services
+dmn stop
+```
+
+## 4) Verify startup state
+
+Expected status progression:
+
+- `Not Started` -> `Starting` -> `Running`
+- If a service exits unexpectedly, OpenDaemon reports `Failed (exit code: N)`
+
+If a service remains in `Starting`, check readiness configuration in
+`ready_when` (pattern/URL/timeout).
+
+## 5) Continue with the right interface
+
+- Use [CLI Guide](/docs/cli) for command-level control.
+- Use [VS Code Extension](/docs/extension) for tree-view operations and logs.
+- Use [MCP Integration](/docs/mcp) for AI-driven status/log workflows.

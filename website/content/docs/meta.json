@@ -1,0 +1,15 @@
+{
+  "title": "OpenDaemon Docs",
+  "description": "Setup, operate, and integrate OpenDaemon",
+  "pages": [
+    "index",
+    "getting-started",
+    "configuration",
+    "runtime-model",
+    "cli",
+    "extension",
+    "mcp",
+    "development",
+    "troubleshooting"
+  ]
+}
