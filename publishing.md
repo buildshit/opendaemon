@@ -206,7 +206,7 @@ Both were validated by workflow before publish steps.
 1. Bump `extension/package.json` version.
 2. Commit and push release changes to `main`.
 3. Let `extension-release-main` auto-create and push `v<extension-version>` tag.
-4. Let `extension-release` run from tag:
+4. Let `extension-release-main` trigger `extension-release` on that tag ref:
    - build binaries
    - package VSIX
    - publish VS Code Marketplace + Open VSX
@@ -232,5 +232,40 @@ Resulting behavior:
 - Test and iterate in `cli`
 - Merge/cherry-pick release commit to `main`
 - Push `main` once
-- Tag, marketplace publish, and GitHub Release happen automatically via workflows
+- `extension-release-main` creates the tag and dispatches `extension-release`
+- `extension-release` handles cross-platform publish and GitHub Release asset upload
+
+---
+
+## v0.1.3 release execution (main-driven)
+
+Main-branch release performed with extension version `0.1.3`:
+
+- Main release commit pushed to `main`:
+  - commit: `e23f685`
+- `extension-release-main` run:
+  - Run ID: `22574921378`
+  - Result: success
+  - Tag created: `v0.1.3`
+- `extension-release` run on `v0.1.3`:
+  - Run ID: `22575014248`
+  - Build/package/publish result: success
+  - `Publish to VS Code Marketplace`: success
+  - `Publish to Open VSX`: success
+  - `create-github-release`: failed (missing `GH_TOKEN` env for `gh` CLI)
+
+Follow-up fixes/actions completed:
+
+- Workflow fix commit on `main`:
+  - `1bbd93d` (dispatch `extension-release` from `extension-release-main` after tag creation)
+  - `28967c9` (set `GH_TOKEN` in `create-github-release` job)
+- GitHub release created manually for this run:
+  - `v0.1.3`
+  - URL: `https://github.com/buildshit/opendaemon/releases/tag/v0.1.3`
+  - Asset: `opendaemon-0.1.3.vsix`
+
+Marketplace visibility verification:
+
+- VS Code Marketplace: `0.1.3` visible
+- Open VSX API: `0.1.3` visible (`latest`)
 

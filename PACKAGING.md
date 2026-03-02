@@ -24,7 +24,7 @@ For macOS targets, the build uses the standard host `clang` toolchain on GitHub 
 1. Bump extension version in `extension/package.json`.
 2. Commit and push the release commit to `main`.
 3. Let `.github/workflows/extension-release-main.yml` create and push the matching `v*` tag.
-4. Let `.github/workflows/extension-release.yml` (tag trigger) build binaries, package VSIX, publish to both marketplaces, and create/update the GitHub Release with the VSIX asset.
+4. Let `extension-release-main` trigger `.github/workflows/extension-release.yml` on the new tag ref to build binaries, package VSIX, publish to both marketplaces, and create/update the GitHub Release with the VSIX asset.
 5. Verify both workflows are successful in Actions.
 
 ### CLI/testing branch flow
