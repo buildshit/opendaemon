@@ -28,7 +28,7 @@ suite('Binary Selection Test Suite', () => {
                 expectedBinaryName = 'dmn-darwin-x64';
             }
         } else if (platform === 'linux') {
-            expectedBinaryName = 'dmn-linux-x64';
+            expectedBinaryName = arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
         } else {
             assert.fail(`Unsupported platform: ${platform}`);
         }
@@ -56,7 +56,7 @@ suite('Binary Selection Test Suite', () => {
         } else if (platform === 'darwin') {
             binaryName = arch === 'arm64' ? 'dmn-darwin-arm64' : 'dmn-darwin-x64';
         } else {
-            binaryName = 'dmn-linux-x64';
+            binaryName = arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
         }
         
         const binaryPath = path.join(extensionPath!, 'bin', binaryName);

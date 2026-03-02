@@ -69,7 +69,7 @@ export class TerminalInterceptor {
                     this.logger.error(`Bin directory does not exist: ${this.binDir}`);
                     
                     // Check parent directory
-                    const parentDir = this.binDir.replace(/[\\\/]bin$/, '');
+                    const parentDir = this.binDir.replace(/[\\/]bin$/, '');
                     if (fs.existsSync(parentDir)) {
                         const parentFiles = fs.readdirSync(parentDir);
                         this.logger.info(`Files in extension directory: ${parentFiles.join(', ')}`);
@@ -351,11 +351,19 @@ export class TerminalInterceptor {
         diagnostics.push('   b. Open a NEW terminal (Ctrl+Shift+`)');
         diagnostics.push('   c. Run: dmn --version');
         diagnostics.push('');
-        diagnostics.push('   If still not working, run this in PowerShell:');
-        diagnostics.push('   $env:PATH -split ";" | Select-String "opendaemon"');
-        diagnostics.push('');
-        diagnostics.push('   Or use the full path:');
-        diagnostics.push(`   & "${this.binDir}\\dmn.exe" --version`);
+        if (process.platform === 'win32') {
+            diagnostics.push('   If still not working, run this in PowerShell:');
+            diagnostics.push('   $env:PATH -split ";" | Select-String "opendaemon"');
+            diagnostics.push('');
+            diagnostics.push('   Or use the full path:');
+            diagnostics.push(`   & "${this.binDir}\\dmn.exe" --version`);
+        } else {
+            diagnostics.push('   If still not working, run this in your shell:');
+            diagnostics.push('   echo "$PATH" | tr ":" "\\n" | grep -i opendaemon');
+            diagnostics.push('');
+            diagnostics.push('   Or use the full path:');
+            diagnostics.push(`   "${this.binDir}/dmn" --version`);
+        }
         
         return diagnostics;
     }
@@ -370,7 +378,7 @@ export class TerminalInterceptor {
             const files = fs.readdirSync(binDir);
             const prioritizedCandidates = os.platform() === 'win32'
                 ? ['dmn.exe', 'dmn-win32-x64.exe', 'dmn.cmd', 'dmn']
-                : ['dmn', 'dmn-linux-x64', 'dmn-darwin-arm64', 'dmn-darwin-x64'];
+                : ['dmn', 'dmn-linux-arm64', 'dmn-linux-x64', 'dmn-darwin-arm64', 'dmn-darwin-x64'];
 
             for (const candidate of prioritizedCandidates) {
                 if (files.includes(candidate)) {

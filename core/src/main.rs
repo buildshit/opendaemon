@@ -161,7 +161,7 @@ async fn run_mcp_mode(config_path: PathBuf, check_only: bool) -> i32 {
     // Create and run MCP server
     // TODO: Check for Pro authentication and use new_authenticated() if authenticated
     // For now, using authenticated version as placeholder for Pro features
-    let mcp_server = DmnMcpServer::new_authenticated(orchestrator);
+    let mcp_server = DmnMcpServer::new_authenticated(orchestrator).with_config_path(config_path);
     if let Err(e) = mcp_server.run_stdio().await {
         eprintln!("MCP server error: {}", e);
         return 1;

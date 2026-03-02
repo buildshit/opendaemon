@@ -1,8 +1,12 @@
 {
   "mcpServers": {
     "opendaemon": {
-      "command": "F:\\test apps\\opendaemon\\target\\release\\dmn.exe",
-      "args": ["mcp"],
+      "command": "f:\\test-apps\\opendaemon\\dist\\dmn-win32-x64.exe",
+      "args": [
+        "mcp",
+        "--config",
+        "f:\\test-apps\\opendaemon\\dmn.json"
+      ],
       "env": {},
       "disabled": false,
       "autoApprove": [
@@ -13,3 +17,4 @@
     }
   }
 }
+

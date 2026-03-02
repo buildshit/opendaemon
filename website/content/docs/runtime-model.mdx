@@ -1,0 +1,47 @@
+---
+title: Runtime Model
+description: How CLI, extension, and MCP calls route and share state.
+---
+
+OpenDaemon is designed around a shared orchestration model across three surfaces:
+
+- `dmn` CLI
+- VS Code extension
+- MCP server (`dmn mcp`)
+
+## Extension-daemon first routing
+
+When a VS Code extension daemon is active for the same config path:
+
+- CLI service commands route to the extension daemon runtime.
+- MCP tool calls also reuse that same runtime.
+
+When no extension daemon is available:
+
+- CLI commands run through a local supervisor runtime.
+- MCP uses its own orchestrator runtime for the loaded config.
+
+## Why this matters
+
+This model keeps service state and logs consistent across interfaces:
+
+- Start a service from the extension, inspect it from CLI.
+- Restart from CLI, read logs via MCP.
+- Keep one source of truth for status when sharing the same config target.
+
+## Config path identity
+
+Runtime sharing depends on targeting the same config path. Use absolute paths
+when possible to avoid accidental divergence between tools.
+
+Example:
+
+```bash
+dmn start --config /absolute/path/to/dmn.json
+```
+
+## Operational guidance
+
+- Use one canonical config path for your workspace.
+- In MCP clients, always pass absolute `--config` in server args.
+- If tool outputs disagree, verify both are pointed to the same `dmn.json`.

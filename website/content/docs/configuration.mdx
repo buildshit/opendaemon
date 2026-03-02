@@ -1,0 +1,103 @@
+---
+title: Configuration
+description: Understand the dmn.json schema and readiness behavior.
+---
+
+OpenDaemon reads a single `dmn.json` file that defines service commands,
+dependencies, readiness checks, and optional environment files.
+
+## Config location
+
+- Default: `./dmn.json` in the current working directory
+- Override with: `--config /absolute/path/to/dmn.json`
+
+Using an absolute config path is recommended for scripts and MCP clients.
+
+## Top-level shape
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "service-name": {
+      "command": "npm run dev"
+    }
+  }
+}
+```
+
+## Service fields
+
+| Field | Type | Required | Purpose |
+| --- | --- | --- | --- |
+| `command` | string | Yes | Command used to start the service |
+| `depends_on` | string[] | No | Services that must start first |
+| `ready_when` | object | No | Readiness probe configuration |
+| `env_file` | string | No | Path to an env file loaded for this service |
+
+## Readiness checks
+
+OpenDaemon supports two readiness modes:
+
+### `log_contains`
+
+Wait until a log line contains a pattern.
+
+```json
+{
+  "ready_when": {
+    "type": "log_contains",
+    "pattern": "Server listening on",
+    "timeout_seconds": 60
+  }
+}
+```
+
+### `url_responds`
+
+Wait until an HTTP endpoint responds.
+
+```json
+{
+  "ready_when": {
+    "type": "url_responds",
+    "url": "http://localhost:3000/health"
+  }
+}
+```
+
+Legacy keys (`log_contains`, `url_responds`) are still recognized for backward
+compatibility.
+
+## Full example
+
+```json
+{
+  "version": "1.0",
+  "services": {
+    "database": {
+      "command": "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:15",
+      "ready_when": {
+        "type": "log_contains",
+        "pattern": "database system is ready to accept connections",
+        "timeout_seconds": 120
+      }
+    },
+    "backend": {
+      "command": "npm run dev",
+      "depends_on": ["database"],
+      "ready_when": {
+        "type": "url_responds",
+        "url": "http://localhost:3000/health"
+      },
+      "env_file": ".env.local"
+    }
+  }
+}
+```
+
+## Best practices
+
+- Prefer explicit readiness checks over fixed sleeps.
+- Keep dependency chains minimal and meaningful.
+- Use absolute `--config` paths in automation and MCP configs.

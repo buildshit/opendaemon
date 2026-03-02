@@ -123,12 +123,16 @@ async fn test_mcp_tool_registration() {
 
     let tools = mcp_server.get_tools();
 
-    assert_eq!(tools.len(), 3, "Should have 3 tools");
+    assert_eq!(tools.len(), 7, "Should have 7 tools");
 
     let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
     assert!(tool_names.contains(&"read_logs".to_string()));
+    assert!(tool_names.contains(&"watch_logs".to_string()));
     assert!(tool_names.contains(&"get_service_status".to_string()));
     assert!(tool_names.contains(&"list_services".to_string()));
+    assert!(tool_names.contains(&"start_service".to_string()));
+    assert!(tool_names.contains(&"stop_service".to_string()));
+    assert!(tool_names.contains(&"restart_service".to_string()));
 }
 
 #[tokio::test]

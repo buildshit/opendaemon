@@ -1,0 +1,60 @@
+---
+title: Development
+description: Build OpenDaemon from source and package the extension.
+---
+
+This page covers local development workflows for the core binary, extension, and
+docs site.
+
+## Build the core binary
+
+From repo root:
+
+```bash
+cd core
+cargo build --release
+```
+
+## Build and test the VS Code extension
+
+```bash
+cd extension
+npm install
+npm run compile
+npm test
+```
+
+Watch mode:
+
+```bash
+cd extension
+npm run watch
+```
+
+## Package and install extension (Windows maintainer loop)
+
+From repo root:
+
+```powershell
+.\scripts\package-and-install-extension.ps1
+```
+
+This performs a quick packaging flow and installs the generated VSIX.
+
+## Run the docs website
+
+```bash
+cd website
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000` to preview the docs.
+
+## Keeping docs current
+
+When behavior changes in CLI, extension, runtime routing, or MCP tools:
+
+- Update corresponding pages in `website/content/docs`
+- Keep examples aligned with actual command/config behavior
+- Validate docs locally before publishing

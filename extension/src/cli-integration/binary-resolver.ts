@@ -53,10 +53,10 @@ function resolveLocalBinary(platform: PlatformInfo, workspaceRoot?: string): Bin
 
   const executableName = platform.os === 'win32' ? 'dmn.exe' : 'dmn';
   const candidates = [
-    path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
     path.join(workspaceRoot, 'target', 'release', executableName),
-    path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName),
-    path.join(workspaceRoot, 'target', 'debug', executableName)
+    path.join(workspaceRoot, 'target', 'debug', executableName),
+    path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
+    path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName)
   ];
   const selected = pickNewestBinary(candidates);
   if (selected) {
@@ -96,14 +96,20 @@ function pickNewestBinary(candidates: string[]): string | null {
  */
 function constructBinaryName(platform: PlatformInfo): string {
   const { os, arch } = platform;
-  
-  // Binary naming convention: dmn-{os}-{arch}[.exe]
-  const baseName = `dmn-${os}-${arch}`;
-  
-  // Add .exe extension for Windows
+
   if (os === 'win32') {
-    return `${baseName}.exe`;
+    // We currently publish one Windows binary. It runs on both x64 and arm64
+    // Windows via built-in x64 emulation on arm64 devices.
+    return 'dmn-win32-x64.exe';
   }
-  
-  return baseName;
+
+  if (os === 'darwin') {
+    return arch === 'arm64' ? 'dmn-darwin-arm64' : 'dmn-darwin-x64';
+  }
+
+  if (os === 'linux') {
+    return arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
+  }
+
+  throw new Error(`Unsupported platform for binary resolution: ${os}`);
 }

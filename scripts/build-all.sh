@@ -13,6 +13,11 @@ echo "Building for Linux x86_64..."
 cargo build --release --target x86_64-unknown-linux-gnu --package dmn-core
 cp target/x86_64-unknown-linux-gnu/release/dmn dist/dmn-linux-x64
 
+# Build for Linux ARM64
+echo "Building for Linux ARM64..."
+cargo build --release --target aarch64-unknown-linux-gnu --package dmn-core
+cp target/aarch64-unknown-linux-gnu/release/dmn dist/dmn-linux-arm64
+
 # Build for macOS x86_64
 echo "Building for macOS x86_64..."
 cargo build --release --target x86_64-apple-darwin --package dmn-core

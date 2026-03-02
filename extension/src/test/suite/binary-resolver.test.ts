@@ -19,6 +19,13 @@ suite('Binary Resolver Test Suite', () => {
         assert.strictEqual(result.name, 'dmn-win32-x64.exe');
     });
 
+    test('Should reuse Windows x64 binary for Windows arm64', () => {
+        const platform: PlatformInfo = { os: 'win32', arch: 'arm64' };
+        const result = resolveBinary(testExtensionPathWin, platform);
+
+        assert.strictEqual(result.name, 'dmn-win32-x64.exe');
+    });
+
     test('Should return correct binary name for macOS ARM64', () => {
         const platform: PlatformInfo = { os: 'darwin', arch: 'arm64' };
         const result = resolveBinary(testExtensionPath, platform);
@@ -38,6 +45,13 @@ suite('Binary Resolver Test Suite', () => {
         const result = resolveBinary(testExtensionPath, platform);
         
         assert.strictEqual(result.name, 'dmn-linux-x64');
+    });
+
+    test('Should return correct binary name for Linux arm64', () => {
+        const platform: PlatformInfo = { os: 'linux', arch: 'arm64' };
+        const result = resolveBinary(testExtensionPath, platform);
+
+        assert.strictEqual(result.name, 'dmn-linux-arm64');
     });
 
     test('Should construct full path correctly on Unix-like systems', () => {
@@ -109,9 +123,11 @@ suite('Binary Resolver Test Suite', () => {
     test('Should only add .exe extension for Windows', () => {
         const platforms: PlatformInfo[] = [
             { os: 'win32', arch: 'x64' },
+            { os: 'win32', arch: 'arm64' },
             { os: 'darwin', arch: 'x64' },
             { os: 'darwin', arch: 'arm64' },
-            { os: 'linux', arch: 'x64' }
+            { os: 'linux', arch: 'x64' },
+            { os: 'linux', arch: 'arm64' }
         ];
         
         platforms.forEach(platform => {

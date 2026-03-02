@@ -8,7 +8,6 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as fc from 'fast-check';
 import { resolveBinary } from '../../cli-integration/binary-resolver';
-import { PlatformInfo } from '../../cli-integration/platform-detector';
 
 suite('Binary Resolver Property Tests', () => {
     test('Property 3: Path Construction Pattern - For any valid extension path and platform-specific binary name, the Binary_Resolver should construct a full path following the pattern {extensionPath}/bin/{binaryName}', () => {
@@ -56,10 +55,17 @@ suite('Binary Resolver Property Tests', () => {
                 assert.ok(result.fullPath.endsWith(result.name),
                     `fullPath ${result.fullPath} should end with binary name ${result.name}`);
                 
-                // Verify binary name follows the naming convention
-                const expectedPrefix = `dmn-${platform.os}-${platform.arch}`;
-                assert.ok(result.name.startsWith(expectedPrefix),
-                    `Binary name ${result.name} should start with ${expectedPrefix}`);
+                // Verify binary name follows the expected platform mapping
+                const expectedName = platform.os === 'win32'
+                    ? 'dmn-win32-x64.exe'
+                    : platform.os === 'darwin'
+                        ? (platform.arch === 'arm64' ? 'dmn-darwin-arm64' : 'dmn-darwin-x64')
+                        : (platform.arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64');
+                assert.strictEqual(
+                    result.name,
+                    expectedName,
+                    `Binary name should be ${expectedName} but got ${result.name}`
+                );
                 
                 // Verify .exe extension for Windows
                 if (platform.os === 'win32') {

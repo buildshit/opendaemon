@@ -8,9 +8,25 @@ Write-Host "Building dmn for current platform..." -ForegroundColor Green
 New-Item -ItemType Directory -Force -Path dist | Out-Null
 
 # Build for current platform
-$buildTargetDir = "target/build-current"
-cargo build --release --package dmn-core --target-dir $buildTargetDir
-if ($LASTEXITCODE -ne 0) {
+$primaryTargetDir = "target/build-current"
+$fallbackTargetDir = "target/build-current-fallback-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff'))"
+$buildTargetDir = $primaryTargetDir
+
+function Invoke-CargoBuild([string]$targetDir) {
+    Write-Host "Running cargo build (target-dir: $targetDir)..." -ForegroundColor DarkGray
+    cargo build --release --package dmn-core --target-dir $targetDir
+    return ($LASTEXITCODE -eq 0)
+}
+
+$buildSucceeded = Invoke-CargoBuild $buildTargetDir
+if (-not $buildSucceeded) {
+    Write-Host "Primary target dir build failed (often caused by locked artifacts)." -ForegroundColor Yellow
+    Write-Host "Retrying with isolated fallback target dir..." -ForegroundColor Yellow
+    $buildTargetDir = $fallbackTargetDir
+    $buildSucceeded = Invoke-CargoBuild $buildTargetDir
+}
+
+if (-not $buildSucceeded) {
     throw @"
 Cargo build failed.
 If you see file lock errors, ensure no process is locking artifacts and retry.

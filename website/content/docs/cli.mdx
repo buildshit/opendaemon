@@ -1,0 +1,73 @@
+---
+title: CLI Guide
+description: Command reference, status model, and operational patterns for dmn.
+---
+
+The `dmn` CLI manages services defined in `dmn.json`.
+
+## Runtime behavior
+
+- If an extension daemon is running for the same config, CLI commands route to it.
+- Otherwise, commands use the local CLI supervisor runtime.
+
+See [Runtime Model](/docs/runtime-model) for details.
+
+## Command reference
+
+| Command | Purpose |
+| --- | --- |
+| `dmn --help` | Show command help |
+| `dmn --version` | Show CLI version |
+| `dmn start [service]` | Start all services, or one service with dependencies |
+| `dmn stop [service]` | Stop all services, or one service |
+| `dmn restart <service>` | Restart one service |
+| `dmn status [service]` | Show status for all services, or one service |
+| `dmn daemon` | Run daemon mode (extension RPC server) |
+| `dmn mcp` | Run MCP server mode |
+| `dmn mcp --check` | Validate MCP setup and config, then exit |
+
+All service commands support `-c, --config <path>` and default to `dmn.json`.
+
+## Common usage
+
+```bash
+# start everything
+dmn start
+
+# start one service + dependencies
+dmn start frontend
+
+# check all statuses
+dmn status
+
+# check one service status
+dmn status frontend
+
+# restart one service
+dmn restart frontend
+
+# stop everything
+dmn stop
+```
+
+## Status values
+
+- `Not Started`
+- `Starting`
+- `Running`
+- `Stopped`
+- `Failed (exit code: N)`
+
+## Config path best practice
+
+Use an absolute config path when commands run outside your workspace shell:
+
+```bash
+dmn start --config /absolute/path/to/dmn.json
+```
+
+## CLI troubleshooting
+
+- `No dmn.json found`: pass `--config` or run in the correct folder.
+- Not routing to extension daemon: confirm extension is open on the same workspace/config.
+- Service stuck in `Starting`: verify `ready_when` pattern/URL and timeout values.

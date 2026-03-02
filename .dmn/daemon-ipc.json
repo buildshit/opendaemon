@@ -1,6 +1,6 @@
 {
   "config_path": "\\\\?\\F:\\test-apps\\opendaemon\\dmn.json",
-  "address": "127.0.0.1:3579",
-  "pid": 8208,
-  "created_at_unix": 1772348307
+  "address": "127.0.0.1:4800",
+  "pid": 29472,
+  "created_at_unix": 1772435555
 }

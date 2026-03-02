@@ -45,7 +45,11 @@ if [ "$PLATFORM" = "Darwin" ]; then
         BINARY_NAME="dmn-darwin-x64"
     fi
 elif [ "$PLATFORM" = "Linux" ]; then
-    BINARY_NAME="dmn-linux-x64"
+    if [ "$ARCH" = "aarch64" ]; then
+        BINARY_NAME="dmn-linux-arm64"
+    else
+        BINARY_NAME="dmn-linux-x64"
+    fi
 else
     # Windows (Git Bash/WSL)
     BINARY_NAME="dmn-win32-x64.exe"
@@ -77,8 +81,12 @@ echo -e "\n${YELLOW}Checking all platform binaries...${NC}"
 ALL_BINARIES=(
     "dmn-win32-x64.exe"
     "dmn-linux-x64"
+    "dmn-linux-arm64"
     "dmn-darwin-x64"
     "dmn-darwin-arm64"
+    "dmn.exe"
+    "dmn.cmd"
+    "dmn"
 )
 
 for binary in "${ALL_BINARIES[@]}"; do

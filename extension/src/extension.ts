@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { DaemonManager } from './daemon';
 import { RpcClient } from './rpc-client';
 import { ServiceTreeDataProvider, ServiceStatus } from './tree-view';
@@ -487,6 +486,7 @@ async function handleConfigDeleted(): Promise<void> {
     if (fileWatcher) {
         fileWatcher.stop();
     }
+
 }
 
 /**

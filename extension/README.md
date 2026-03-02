@@ -1,105 +1,90 @@
 # OpenDaemon VS Code Extension
 
-Orchestrate local development services with declarative configuration.
+The extension provides visual service orchestration for the same OpenDaemon runtime used by the CLI and MCP server.
 
 ## Features
 
-- **Service Management**: Manage multiple services from a single `dmn.json` configuration
-- **Dependency-Aware Startup**: Services start in the correct order based on dependencies
-- **Real-Time Log Streaming**: View logs from any service in the output panel
-- **Service Status Monitoring**: Visual tree view showing service status with icons
-- **AI Agent Integration**: MCP server for AI-powered log analysis
-- **Configuration Wizard**: Automatically detect and suggest services from package.json and docker-compose.yml
-- **File Watching**: Automatically reload when dmn.json changes
+- `OpenDaemon Services` tree view in Explorer
+- Start/stop/restart actions per service
+- `Start All Services` and `Stop All Services`
+- Service logs and dedicated service terminals (`dmn: <service>`)
+- Automatic CLI availability in new integrated terminals
+- Config creation flow when `dmn.json` is missing
 
-## Project Structure
+## Command Palette
 
-```
-extension/
-├── src/
-│   ├── extension.ts       # Main extension entry point
-│   ├── daemon.ts          # Daemon process manager
-│   ├── rpc-client.ts      # JSON-RPC client for daemon communication
-│   ├── tree-view.ts       # Service tree view provider
-│   ├── commands.ts        # Command handlers (start/stop/restart)
-│   ├── logs.ts            # Log output panel manager
-│   ├── wizard.ts          # Configuration creation wizard
-│   ├── file-watcher.ts    # dmn.json file watcher
-│   └── test/              # Test suites
-├── package.json           # Extension manifest
-├── tsconfig.json          # TypeScript configuration
-└── README.md              # This file
-```
+Use `OpenDaemon: ...` commands, including:
+
+- `Start All Services`
+- `Stop All Services`
+- `Start Service`
+- `Stop Service`
+- `Restart Service`
+- `Show Logs`
+- `Open Terminal`
+- `New Terminal with CLI`
+- `Show CLI Logs`
+- `Run CLI Diagnostics`
 
 ## Usage
 
-1. Create a `dmn.json` file in your workspace root (or use the wizard)
-2. Define your services with commands and dependencies
-3. Use the OpenDaemon sidebar to start/stop services
-4. View logs in the output panel
-5. Right-click services for context menu actions
-
-## Configuration Example
-
-```json
-{
-  "version": "1.0",
-  "services": {
-    "database": {
-      "command": "docker-compose up postgres",
-      "depends_on": [],
-      "ready_when": {
-        "log_contains": "database system is ready"
-      }
-    },
-    "backend": {
-      "command": "npm run dev",
-      "depends_on": ["database"],
-      "ready_when": {
-        "url_responds": "http://localhost:3000/health"
-      }
-    }
-  }
-}
-```
+1. Open a workspace that contains `dmn.json`.
+2. Open the `OpenDaemon Services` view.
+3. Start services from the view title buttons or service context menu.
+4. Inspect logs and terminals while services run.
 
 ## Development
 
-### Build
-
 ```bash
+cd extension
 npm install
 npm run compile
-```
-
-### Test
-
-```bash
 npm test
 ```
 
-### Watch Mode
+For watch mode:
 
 ```bash
+cd extension
 npm run watch
 ```
 
-## Commands
+## Packaging and Install (Windows Maintainer Loop)
 
-- `OpenDaemon: Start All Services` - Start all services in dependency order
-- `OpenDaemon: Stop All Services` - Stop all services
-- `OpenDaemon: Start Service` - Start a specific service
-- `OpenDaemon: Stop Service` - Stop a specific service
-- `OpenDaemon: Restart Service` - Restart a specific service
-- `OpenDaemon: Show Logs` - Show logs for a service
+From repo root:
 
-## Requirements
+```powershell
+.\scripts\package-and-install-extension.ps1
+```
 
-- VS Code 1.85.0 or higher
-- OpenDaemon Rust binary (bundled with extension)
+This quick loop builds a Windows binary, bundles it, and installs the generated VSIX into supported editors on your machine.
 
-## See Also
+## Cross-Platform Release Packaging
 
-- Main OpenDaemon documentation for `dmn.json` schema details
-- MCP integration guide for AI agent usage
+For a release-ready VSIX (Windows + macOS + Linux binaries), use CI and the release workflow:
 
+- Workflow: `.github/workflows/extension-release.yml`
+- Builds binaries for:
+  - Windows x64
+  - macOS x64 + arm64
+  - Linux x64 + arm64
+- Bundles all binaries into one VSIX and can publish to both marketplaces.
+
+See [PACKAGING.md](PACKAGING.md) for the full release process and token setup.
+
+## License
+
+This extension is licensed under GNU AGPL v3 (`AGPL-3.0-only`).
+
+## Troubleshooting
+
+- Open a **new** integrated terminal after activation to get injected CLI PATH changes.
+- Use `OpenDaemon: Show CLI Logs` for integration diagnostics.
+- Use `OpenDaemon: Run CLI Diagnostics` to verify binary path and terminal env setup.
+
+## Related Docs
+
+- [Project README](../README.md)
+- [CLI Guide](../CLI.md)
+- [MCP Guide](../MCP.md)
+- [Extension Packaging Guide](PACKAGING.md)

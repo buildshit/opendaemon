@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
-import * as fs from 'fs';
 import * as vscode from 'vscode';
+import { resolveDmnBinaryPath } from './binary-path';
 
 export class DaemonManager {
     private process: ChildProcess | null = null;
@@ -90,65 +90,7 @@ export class DaemonManager {
      * Get the path to the dmn binary
      */
     private getBinaryPath(): string {
-        const platform = process.platform;
-        const arch = process.arch;
-        
-        // First, check for locally built binary in workspace (for development)
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders && workspaceFolders.length > 0) {
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-
-            const executableName = platform === 'win32' ? 'dmn.exe' : 'dmn';
-            const localCandidates = [
-                path.join(workspaceRoot, 'target', 'build-current', 'release', executableName),
-                path.join(workspaceRoot, 'target', 'release', executableName),
-                path.join(workspaceRoot, 'target', 'build-current', 'debug', executableName),
-                path.join(workspaceRoot, 'target', 'debug', executableName)
-            ];
-
-            let selectedPath: string | null = null;
-            let selectedMtime = -1;
-            for (const candidate of localCandidates) {
-                if (!fs.existsSync(candidate)) {
-                    continue;
-                }
-                const mtime = fs.statSync(candidate).mtimeMs;
-                if (mtime > selectedMtime) {
-                    selectedMtime = mtime;
-                    selectedPath = candidate;
-                }
-            }
-
-            if (selectedPath) {
-                console.log(`[DaemonManager] Using newest local binary: ${selectedPath}`);
-                return selectedPath;
-            }
-        }
-        
-        // Fall back to bundled binary
-        let binaryName: string;
-        
-        // Select platform-specific binary
-        if (platform === 'win32') {
-            binaryName = 'dmn-win32-x64.exe';
-        } else if (platform === 'darwin') {
-            // macOS - check architecture
-            if (arch === 'arm64') {
-                binaryName = 'dmn-darwin-arm64';
-            } else {
-                binaryName = 'dmn-darwin-x64';
-            }
-        } else if (platform === 'linux') {
-            binaryName = 'dmn-linux-x64';
-        } else {
-            throw new Error(`Unsupported platform: ${platform}`);
-        }
-
-        // Look for binary in extension's bin directory
-        const binPath = path.join(this.context.extensionPath, 'bin', binaryName);
-        console.log(`[DaemonManager] Using bundled binary: ${binPath}`);
-        
-        return binPath;
+        return resolveDmnBinaryPath(this.context);
     }
 
     /**

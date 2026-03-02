@@ -1,0 +1,52 @@
+---
+title: VS Code Extension
+description: Use the OpenDaemon extension to manage services visually.
+---
+
+The extension provides visual orchestration for the same OpenDaemon runtime used
+by the CLI and MCP server.
+
+## Features
+
+- `OpenDaemon Services` tree view in Explorer
+- Start/stop/restart actions per service
+- `Start All Services` and `Stop All Services`
+- Service logs and dedicated service terminals (`dmn: <service>`)
+- Automatic CLI availability in new integrated terminals
+- Config creation flow when `dmn.json` is missing
+
+## Command palette actions
+
+Use `OpenDaemon: ...` commands, including:
+
+- `Start All Services`
+- `Stop All Services`
+- `Start Service`
+- `Stop Service`
+- `Restart Service`
+- `Show Logs`
+- `Open Terminal`
+- `New Terminal with CLI`
+- `Show CLI Logs`
+- `Run CLI Diagnostics`
+
+## Typical workflow
+
+1. Open a workspace that contains `dmn.json`.
+2. Open the `OpenDaemon Services` view.
+3. Start services from view title buttons or per-service context menus.
+4. Use logs and service terminals while services run.
+
+## Runtime integration
+
+The extension daemon can become the shared runtime endpoint for both CLI and MCP
+calls that target the same config path. This keeps status and logs consistent
+across interfaces.
+
+See [Runtime Model](/docs/runtime-model) for routing behavior.
+
+## Troubleshooting
+
+- Open a **new** integrated terminal after activation to get injected CLI PATH changes.
+- Use `OpenDaemon: Show CLI Logs` for integration diagnostics.
+- Use `OpenDaemon: Run CLI Diagnostics` to verify binary path and terminal env setup.
