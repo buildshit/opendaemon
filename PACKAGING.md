@@ -22,9 +22,15 @@ For macOS targets, the build uses the standard host `clang` toolchain on GitHub 
 ## Recommended Release Flow
 
 1. Bump extension version in `extension/package.json`.
-2. Push a tag (for example `v0.1.1`) or run the release workflow manually.
-3. Let `.github/workflows/extension-release.yml` build and package the VSIX.
-4. Publish using workflow automation (requires secrets) or publish manually.
+2. Commit and push the release commit to `main`.
+3. Let `.github/workflows/extension-release-main.yml` create and push the matching `v*` tag.
+4. Let `.github/workflows/extension-release.yml` (tag trigger) build binaries, package VSIX, publish to both marketplaces, and create/update the GitHub Release with the VSIX asset.
+5. Verify both workflows are successful in Actions.
+
+### CLI/testing branch flow
+
+Use `cli` for validation and iteration, then merge/cherry-pick release-ready changes into `main`.
+Only `main` pushes should drive automated release tags and GitHub Release publication.
 
 ## Required Publish Secrets
 
@@ -32,25 +38,6 @@ Configure repository secrets:
 
 - `VSCE_PAT`
 - `OVSX_PAT`
-
-## GitHub Releases (VSIX Downloads)
-
-To make VSIX downloads available from your repository page:
-
-1. Run the workflow with `publish=false` or `publish=true` to generate `extension-vsix`.
-2. Download the VSIX artifact from the run.
-3. Create a GitHub release and attach the VSIX:
-
-```bash
-gh release create v<version> dist/opendaemon-<version>.vsix \
-  --repo buildshit/opendaemon \
-  --title "OpenDaemon v<version>" \
-  --notes "Cross-platform VSIX release."
-```
-
-This gives users a direct installable package even if they do not use a marketplace.
-
-Workflow note: release automation removes stale `dist/*.vsix` files before packaging and always publishes the newest VSIX artifact.
 
 ## One-Time Marketplace Setup
 
