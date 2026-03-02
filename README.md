@@ -7,6 +7,7 @@ OpenDaemon orchestrates local development services from a single `dmn.json` file
 - [CLI Guide](CLI.md)
 - [Extension Guide](extension/README.md)
 - [MCP Guide](MCP.md)
+- [Packaging & Publishing](PACKAGING.md)
 
 ## Core Capabilities
 
@@ -74,3 +75,7 @@ npm run compile
 - Use `--config` with an absolute path when running `dmn` from scripts or MCP clients.
 - If a VS Code extension daemon is running for the same config, CLI and MCP calls route to it.
 - If no extension daemon is available, `dmn start` runs in local supervisor mode.
+
+## License
+
+OpenDaemon is licensed under GNU AGPL v3 (`AGPL-3.0-only`). See `LICENSE`.

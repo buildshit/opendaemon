@@ -1,15 +1,21 @@
 # Development files
 .vscode/**
 .vscode-test/**
+.test-extensions/**
+.test-user-data/**
+.test-workspace/**
 src/**
 .gitignore
 .eslintrc.json
 tsconfig.json
+*.vsix
 
 # Build artifacts
 **/*.map
 **/*.ts
-!out/**/*.js
+out/**
+!out/*.js
+!out/cli-integration/**/*.js
 
 # Dependencies (not needed in package)
 node_modules/**

@@ -11,6 +11,9 @@ import * as vscode from 'vscode';
 export function resolveDmnBinaryPath(context: vscode.ExtensionContext): string {
     const platform = process.platform;
     const arch = process.arch;
+    if (arch !== 'x64' && arch !== 'arm64') {
+        throw new Error(`Unsupported architecture: ${arch}`);
+    }
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
@@ -48,7 +51,7 @@ export function resolveDmnBinaryPath(context: vscode.ExtensionContext): string {
     } else if (platform === 'darwin') {
         binaryName = arch === 'arm64' ? 'dmn-darwin-arm64' : 'dmn-darwin-x64';
     } else if (platform === 'linux') {
-        binaryName = 'dmn-linux-x64';
+        binaryName = arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
     } else {
         throw new Error(`Unsupported platform: ${platform}`);
     }

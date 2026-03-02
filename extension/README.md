@@ -57,7 +57,24 @@ From repo root:
 .\scripts\package-and-install-extension.ps1
 ```
 
-This runs quick packaging and installs the generated VSIX into your editor.
+This quick loop builds a Windows binary, bundles it, and installs the generated VSIX into supported editors on your machine.
+
+## Cross-Platform Release Packaging
+
+For a release-ready VSIX (Windows + macOS + Linux binaries), use CI and the release workflow:
+
+- Workflow: `.github/workflows/extension-release.yml`
+- Builds binaries for:
+  - Windows x64
+  - macOS x64 + arm64
+  - Linux x64 + arm64
+- Bundles all binaries into one VSIX and can publish to both marketplaces.
+
+See [PACKAGING.md](PACKAGING.md) for the full release process and token setup.
+
+## License
+
+This extension is licensed under GNU AGPL v3 (`AGPL-3.0-only`).
 
 ## Troubleshooting
 
@@ -70,3 +87,4 @@ This runs quick packaging and installs the generated VSIX into your editor.
 - [Project README](../README.md)
 - [CLI Guide](../CLI.md)
 - [MCP Guide](../MCP.md)
+- [Extension Packaging Guide](PACKAGING.md)

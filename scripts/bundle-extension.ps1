@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Force -Path extension/bin | Out-Null
 # Copy all platform binaries to extension
 Write-Host "Copying binaries to extension/bin..." -ForegroundColor Cyan
 if (Test-Path dist/dmn-linux-x64) { Copy-Item dist/dmn-linux-x64 extension/bin/ }
+if (Test-Path dist/dmn-linux-arm64) { Copy-Item dist/dmn-linux-arm64 extension/bin/ }
 if (Test-Path dist/dmn-darwin-x64) { Copy-Item dist/dmn-darwin-x64 extension/bin/ }
 if (Test-Path dist/dmn-darwin-arm64) { Copy-Item dist/dmn-darwin-arm64 extension/bin/ }
 if (Test-Path dist/dmn-win32-x64.exe) { Copy-Item dist/dmn-win32-x64.exe extension/bin/ }

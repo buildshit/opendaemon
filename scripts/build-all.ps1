@@ -12,6 +12,11 @@ Write-Host "Building for Linux x86_64..." -ForegroundColor Cyan
 cargo build --release --target x86_64-unknown-linux-gnu --package dmn-core
 Copy-Item target/x86_64-unknown-linux-gnu/release/dmn dist/dmn-linux-x64
 
+# Build for Linux ARM64
+Write-Host "Building for Linux ARM64..." -ForegroundColor Cyan
+cargo build --release --target aarch64-unknown-linux-gnu --package dmn-core
+Copy-Item target/aarch64-unknown-linux-gnu/release/dmn dist/dmn-linux-arm64
+
 # Build for macOS x86_64
 Write-Host "Building for macOS x86_64..." -ForegroundColor Cyan
 cargo build --release --target x86_64-apple-darwin --package dmn-core

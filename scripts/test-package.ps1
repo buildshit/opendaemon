@@ -29,8 +29,12 @@ try {
     $allBinaries = @(
         "dmn-win32-x64.exe",
         "dmn-linux-x64",
+        "dmn-linux-arm64",
         "dmn-darwin-x64",
-        "dmn-darwin-arm64"
+        "dmn-darwin-arm64",
+        "dmn.exe",
+        "dmn.cmd",
+        "dmn"
     )
     
     $missingBinaries = @()

@@ -36,7 +36,7 @@ export class NotificationManager {
    * @param binDir - Path to the bin directory containing the CLI
    */
   async showCLIInfoNotification(binDir: string): Promise<void> {
-    const message = "OpenDaemon CLI is now available in VS Code terminals! Type 'dmn --help' to get started.";
+    const message = `OpenDaemon CLI is now available in VS Code terminals from ${binDir}. Type 'dmn --help' to get started.`;
     const openTerminal = 'Open Terminal';
     const viewDocs = 'View Documentation';
     const dontShowAgain = "Don't Show Again";
@@ -55,7 +55,7 @@ export class NotificationManager {
       terminal.show();
     } else if (selection === viewDocs) {
       // Open documentation
-      const docsUri = vscode.Uri.parse('https://github.com/yourusername/opendaemon#cli-usage');
+      const docsUri = vscode.Uri.parse('https://github.com/opendaemon/opendaemon/blob/main/CLI.md');
       vscode.env.openExternal(docsUri);
     }
   }
@@ -72,7 +72,7 @@ export class NotificationManager {
     );
 
     if (selection === viewDocs) {
-      const docsUri = vscode.Uri.parse('https://github.com/yourusername/opendaemon#troubleshooting');
+      const docsUri = vscode.Uri.parse('https://github.com/opendaemon/opendaemon/blob/main/CLI.md#troubleshooting');
       vscode.env.openExternal(docsUri);
     }
   }
@@ -99,10 +99,11 @@ export class NotificationManager {
         '6. Click "OK" to save and restart your terminals';
     } else {
       // Unix-like systems (macOS, Linux)
+      const unixBinaryName = this.getUnixBinaryName(platform);
       message = 'To use the OpenDaemon CLI globally in any terminal:';
       instructions =
         'Option 1: Copy to /usr/local/bin (requires sudo):\n' +
-        `   sudo cp ${binDir}/dmn-${platform.os}-${platform.arch} /usr/local/bin/dmn\n` +
+        `   sudo cp ${binDir}/${unixBinaryName} /usr/local/bin/dmn\n` +
         `   sudo chmod +x /usr/local/bin/dmn\n\n` +
         'Option 2: Add to your PATH in shell profile (~/.bashrc, ~/.zshrc, etc.):\n' +
         `   export PATH="${binDir}:$PATH"`;
@@ -137,5 +138,17 @@ export class NotificationManager {
    */
   private markFirstTimeShown(): void {
     this.context.globalState.update(FIRST_TIME_NOTIFICATION_KEY, true);
+  }
+
+  private getUnixBinaryName(platform: PlatformInfo): string {
+    if (platform.os === 'darwin') {
+      return platform.arch === 'arm64' ? 'dmn-darwin-arm64' : 'dmn-darwin-x64';
+    }
+
+    if (platform.os === 'linux') {
+      return platform.arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
+    }
+
+    throw new Error(`Unsupported Unix platform: ${platform.os}`);
   }
 }

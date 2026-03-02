@@ -18,7 +18,7 @@ function getBinaryPath(extensionPath) {
             binaryName = 'dmn-darwin-x64';
         }
     } else if (platform === 'linux') {
-        binaryName = 'dmn-linux-x64';
+        binaryName = arch === 'arm64' ? 'dmn-linux-arm64' : 'dmn-linux-x64';
     } else {
         throw new Error(`Unsupported platform: ${platform}`);
     }
