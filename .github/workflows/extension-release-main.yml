@@ -1,0 +1,72 @@
+name: extension-release-main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - extension/package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release-main
+  cancel-in-progress: false
+
+jobs:
+  tag-release-version:
+    name: tag-release-version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Read extension version
+        id: version
+        run: |
+          VERSION="$(node -p "require('./extension/package.json').version")"
+          TAG_NAME="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Detected extension version: ${VERSION}"
+
+      - name: Check if tag already exists
+        id: tag_check
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          if git show-ref --tags --verify --quiet "refs/tags/${TAG_NAME}"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push release tag
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          git tag "${TAG_NAME}"
+          git push origin "${TAG_NAME}"
+          echo "Created tag ${TAG_NAME}; extension-release workflow will publish and create GitHub release."
+
+      - name: Skip when version tag exists
+        if: steps.tag_check.outputs.exists == 'true'
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          echo "Tag ${TAG_NAME} already exists. Skipping auto-release tag creation."

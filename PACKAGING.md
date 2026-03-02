@@ -22,9 +22,15 @@ For macOS targets, the build uses the standard host `clang` toolchain on GitHub 
 ## Recommended Release Flow
 
 1. Bump extension version in `extension/package.json`.
-2. Push a tag (for example `v0.1.1`) or run the release workflow manually.
-3. Let `.github/workflows/extension-release.yml` build and package the VSIX.
-4. Publish using workflow automation (requires secrets) or publish manually.
+2. Commit and push the release commit to `main`.
+3. Let `.github/workflows/extension-release-main.yml` create and push the matching `v*` tag.
+4. Let `.github/workflows/extension-release.yml` (tag trigger) build binaries, package VSIX, publish to both marketplaces, and create/update the GitHub Release with the VSIX asset.
+5. Verify both workflows are successful in Actions.
+
+### CLI/testing branch flow
+
+Use `cli` for validation and iteration, then merge/cherry-pick release-ready changes into `main`.
+Only `main` pushes should drive automated release tags and GitHub Release publication.
 
 ## Required Publish Secrets
 
