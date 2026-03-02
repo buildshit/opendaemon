@@ -32,6 +32,10 @@ The workflow:
 4. Packages a single multi-platform VSIX.
 5. Optionally publishes to both VS Code Marketplace and Open VSX.
 
+Notes:
+- macOS binaries are built natively on GitHub macOS runners using host `clang`.
+- No local Windows drive letter assumptions are used in extension runtime path resolution.
+
 ## Required Secrets for Publish
 
 Set these repository secrets before enabling publish:

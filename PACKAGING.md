@@ -16,6 +16,9 @@ and supports publishing to:
 - VS Code Marketplace
 - Open VSX (for VS Code forks)
 
+CI builds compile each binary on a native runner for that OS/architecture pair.  
+For macOS targets, the build uses the standard host `clang` toolchain on GitHub Actions runners.
+
 ## Recommended Release Flow
 
 1. Bump extension version in `extension/package.json`.
