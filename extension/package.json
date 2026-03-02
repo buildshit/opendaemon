@@ -2,7 +2,7 @@
   "name": "opendaemon",
   "displayName": "OpenDaemon",
   "description": "Orchestrate local development services with declarative configuration",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "opendaemon",
   "license": "AGPL-3.0-only",
   "repository": {

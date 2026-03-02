@@ -33,6 +33,23 @@ Configure repository secrets:
 - `VSCE_PAT`
 - `OVSX_PAT`
 
+## GitHub Releases (VSIX Downloads)
+
+To make VSIX downloads available from your repository page:
+
+1. Run the workflow with `publish=false` or `publish=true` to generate `extension-vsix`.
+2. Download the VSIX artifact from the run.
+3. Create a GitHub release and attach the VSIX:
+
+```bash
+gh release create v<version> dist/opendaemon-<version>.vsix \
+  --repo buildshit/opendaemon \
+  --title "OpenDaemon v<version>" \
+  --notes "Cross-platform VSIX release."
+```
+
+This gives users a direct installable package even if they do not use a marketplace.
+
 ## One-Time Marketplace Setup
 
 Before first publish:

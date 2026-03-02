@@ -73,3 +73,16 @@ To attempt local all-target binary builds first:
 - command wrappers (`dmn`, `dmn.exe`, `dmn.cmd`) are included
 - expected compiled extension files exist
 - dev/source files are excluded from the package
+
+## GitHub Release Distribution
+
+After a successful packaging/publish run, create a GitHub release and upload the VSIX artifact:
+
+```bash
+gh release create v<version> dist/opendaemon-<version>.vsix \
+  --repo buildshit/opendaemon \
+  --title "OpenDaemon v<version>" \
+  --notes "Cross-platform extension package."
+```
+
+This provides a direct manual installation download in addition to marketplace installs.
