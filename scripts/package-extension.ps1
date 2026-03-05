@@ -32,10 +32,10 @@ $missingDistBinaries = @()
 foreach ($binary in $requiredDistBinaries) {
     if (-not (Test-Path $binary)) {
         $missingDistBinaries += $binary
-        Write-Host "  ✗ Missing: $binary" -ForegroundColor Red
+        Write-Host "  [MISSING] Missing: $binary" -ForegroundColor Red
     } else {
         $size = [math]::Round((Get-Item $binary).Length / 1MB, 2)
-        Write-Host "  ✓ Found: $binary ($size MB)" -ForegroundColor Green
+        Write-Host "  [OK] Found: $binary ($size MB)" -ForegroundColor Green
     }
 }
 
@@ -71,10 +71,10 @@ $missingBundledFiles = @()
 foreach ($file in $requiredBundledFiles) {
     if (-not (Test-Path $file)) {
         $missingBundledFiles += $file
-        Write-Host "  ✗ Missing: $file" -ForegroundColor Red
+        Write-Host "  [MISSING] Missing: $file" -ForegroundColor Red
     } else {
         $size = [math]::Round((Get-Item $file).Length / 1MB, 2)
-        Write-Host "  ✓ Found: $file ($size MB)" -ForegroundColor Green
+        Write-Host "  [OK] Found: $file ($size MB)" -ForegroundColor Green
     }
 }
 
@@ -105,7 +105,7 @@ if (-not (Test-Path "out/extension.js")) {
     Pop-Location
     throw "TypeScript compilation did not produce expected output"
 }
-Write-Host "  ✓ TypeScript compiled successfully" -ForegroundColor Green
+Write-Host "  [OK] TypeScript compiled successfully" -ForegroundColor Green
 
 # Step 7: Verify package.json
 Write-Host "Step 7/9: Verifying package.json..." -ForegroundColor Cyan
@@ -126,9 +126,9 @@ if (-not $packageJson.license) {
     Pop-Location
     throw "package.json missing 'license' field"
 }
-Write-Host "  ✓ Package: $($packageJson.name) v$($packageJson.version)" -ForegroundColor Green
-Write-Host "  ✓ Publisher: $($packageJson.publisher)" -ForegroundColor Green
-Write-Host "  ✓ License: $($packageJson.license)" -ForegroundColor Green
+Write-Host "  [OK] Package: $($packageJson.name) v$($packageJson.version)" -ForegroundColor Green
+Write-Host "  [OK] Publisher: $($packageJson.publisher)" -ForegroundColor Green
+Write-Host "  [OK] License: $($packageJson.license)" -ForegroundColor Green
 
 # Step 8: Package extension with vsce
 Write-Host "Step 8/9: Packaging extension with vsce..." -ForegroundColor Cyan
@@ -148,12 +148,12 @@ if (-not $vsixFile) {
 }
 
 $packageSize = [math]::Round($vsixFile.Length / 1MB, 2)
-Write-Host "  ✓ Package created: $($vsixFile.Name)" -ForegroundColor Green
-Write-Host "  ✓ Size: $packageSize MB" -ForegroundColor Green
+Write-Host "  [OK] Package created: $($vsixFile.Name)" -ForegroundColor Green
+Write-Host "  [OK] Size: $packageSize MB" -ForegroundColor Green
 
 & .\scripts\test-package.ps1
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ⚠ Package tests failed (non-fatal)" -ForegroundColor Yellow
+    Write-Host "  [WARN] Package tests failed (non-fatal)" -ForegroundColor Yellow
 }
 
 Write-Host "`n========================================" -ForegroundColor Green

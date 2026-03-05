@@ -21,7 +21,10 @@ $tempDir = New-Item -ItemType Directory -Path "$env:TEMP\opendaemon-test-$(Get-R
 try {
     # Extract VSIX (it's a ZIP file)
     Write-Host "`nExtracting package..." -ForegroundColor Yellow
-    Expand-Archive -Path $vsixFile.FullName -DestinationPath $tempDir -Force
+    # Expand-Archive only accepts .zip extension, so stage a temporary copy.
+    $zipPath = Join-Path $tempDir "package.zip"
+    Copy-Item -Path $vsixFile.FullName -Destination $zipPath -Force
+    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
     
     # Verify binaries exist in package
     Write-Host "`nVerifying binaries in package..." -ForegroundColor Yellow
@@ -43,9 +46,9 @@ try {
         
         if (Test-Path $binaryPath) {
             $binarySize = [math]::Round((Get-Item $binaryPath).Length / 1MB, 2)
-            Write-Host "✓ $binary ($binarySize MB)" -ForegroundColor Green
+            Write-Host "[OK] $binary ($binarySize MB)" -ForegroundColor Green
         } else {
-            Write-Host "✗ $binary (missing)" -ForegroundColor Red
+            Write-Host "[MISSING] $binary (missing)" -ForegroundColor Red
             $missingBinaries += $binary
         }
     }
@@ -56,22 +59,22 @@ try {
     $binaryPath = Join-Path $tempDir "extension\bin\$currentBinary"
     
     if (Test-Path $binaryPath) {
-        Write-Host "✓ Binary found in package: $currentBinary" -ForegroundColor Green
+        Write-Host "[OK] Binary found in package: $currentBinary" -ForegroundColor Green
         
         # Test if binary is executable
         try {
             $version = & $binaryPath --version 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "✓ Binary is executable" -ForegroundColor Green
+                Write-Host "[OK] Binary is executable" -ForegroundColor Green
                 Write-Host "  Version: $version" -ForegroundColor Cyan
             } else {
-                Write-Host "✗ Binary failed to execute" -ForegroundColor Red
+                Write-Host "[FAIL] Binary failed to execute" -ForegroundColor Red
             }
         } catch {
-            Write-Host "✗ Binary failed to execute: $_" -ForegroundColor Red
+            Write-Host "[FAIL] Binary failed to execute: $_" -ForegroundColor Red
         }
     } else {
-        Write-Host "✗ Binary not found in package" -ForegroundColor Red
+        Write-Host "[FAIL] Binary not found in package" -ForegroundColor Red
         Write-Host "  Expected: $binaryPath" -ForegroundColor Yellow
     }
     
@@ -94,9 +97,9 @@ try {
     foreach ($file in $requiredFiles) {
         $filePath = Join-Path $tempDir $file
         if (Test-Path $filePath) {
-            Write-Host "✓ $file" -ForegroundColor Green
+            Write-Host "[OK] $file" -ForegroundColor Green
         } else {
-            Write-Host "✗ $file (missing)" -ForegroundColor Red
+            Write-Host "[MISSING] $file (missing)" -ForegroundColor Red
             $missingFiles += $file
         }
     }
@@ -114,10 +117,10 @@ try {
     foreach ($file in $excludedFiles) {
         $filePath = Join-Path $tempDir $file
         if (Test-Path $filePath) {
-            Write-Host "✗ $file (should be excluded)" -ForegroundColor Red
+            Write-Host "[FAIL] $file (should be excluded)" -ForegroundColor Red
             $incorrectlyIncluded += $file
         } else {
-            Write-Host "✓ $file (correctly excluded)" -ForegroundColor Green
+            Write-Host "[OK] $file (correctly excluded)" -ForegroundColor Green
         }
     }
     
@@ -129,30 +132,30 @@ try {
     $allPassed = $true
     
     if ($missingBinaries.Count -gt 0) {
-        Write-Host "✗ Missing binaries: $($missingBinaries.Count)" -ForegroundColor Red
+        Write-Host "[FAIL] Missing binaries: $($missingBinaries.Count)" -ForegroundColor Red
         $allPassed = $false
     } else {
-        Write-Host "✓ All binaries present" -ForegroundColor Green
+        Write-Host "[OK] All binaries present" -ForegroundColor Green
     }
     
     if ($missingFiles.Count -gt 0) {
-        Write-Host "✗ Missing required files: $($missingFiles.Count)" -ForegroundColor Red
+        Write-Host "[FAIL] Missing required files: $($missingFiles.Count)" -ForegroundColor Red
         $allPassed = $false
     } else {
-        Write-Host "✓ All required files present" -ForegroundColor Green
+        Write-Host "[OK] All required files present" -ForegroundColor Green
     }
     
     if ($incorrectlyIncluded.Count -gt 0) {
-        Write-Host "✗ Files that should be excluded: $($incorrectlyIncluded.Count)" -ForegroundColor Red
+        Write-Host "[FAIL] Files that should be excluded: $($incorrectlyIncluded.Count)" -ForegroundColor Red
         $allPassed = $false
     } else {
-        Write-Host "✓ Source files correctly excluded" -ForegroundColor Green
+        Write-Host "[OK] Source files correctly excluded" -ForegroundColor Green
     }
     
     if ($allPassed) {
-        Write-Host "`n✓ All tests passed!" -ForegroundColor Green
+        Write-Host "`n[OK] All tests passed!" -ForegroundColor Green
     } else {
-        Write-Host "`n✗ Some tests failed" -ForegroundColor Red
+        Write-Host "`n[FAIL] Some tests failed" -ForegroundColor Red
     }
     
 } finally {

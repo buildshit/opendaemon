@@ -66,6 +66,7 @@ dmn start --config /absolute/path/to/dmn.json
 - `No dmn.json found`: pass `--config` or run in the correct folder.
 - Command not routing to extension daemon: confirm extension is open on the same workspace/config.
 - Service stuck in `Starting`: verify `ready_when` pattern/URL and timeout values.
+- On Windows, `stop` now force-terminates process trees to prevent wrapper child processes from lingering and keeping ports busy.
 
 ## Related Docs
 

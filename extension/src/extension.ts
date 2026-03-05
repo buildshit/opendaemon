@@ -29,6 +29,7 @@ let statusRefreshInFlight = false;
 
 // Interval for periodic status refresh (as a fallback to real-time notifications)
 const STATUS_REFRESH_INTERVAL_MS = 2000;
+const STOP_ALL_BEFORE_SHUTDOWN_TIMEOUT_MS = 8000;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('OpenDaemon extension is now active');
@@ -233,6 +234,9 @@ export async function deactivate() {
         activityLogger.log('Extension deactivated');
     }
 
+    // Best-effort service shutdown before daemon teardown so ports are released.
+    await requestStopAllBeforeShutdown('extension deactivation');
+
     // Deactivate CLI integration
     if (cliManager) {
         await cliManager.deactivate();
@@ -436,6 +440,9 @@ async function handleConfigChanged(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
 
+    // Best-effort service shutdown before daemon restart on config updates.
+    await requestStopAllBeforeShutdown('config change');
+
     // Stop current daemon
     if (daemonManager) {
         await daemonManager.stop();
@@ -465,6 +472,9 @@ async function handleConfigChanged(): Promise<void> {
 async function handleConfigDeleted(): Promise<void> {
     // Stop periodic status refresh
     stopPeriodicStatusRefresh();
+
+    // Best-effort service shutdown before daemon teardown.
+    await requestStopAllBeforeShutdown('config deletion');
 
     // Stop daemon
     if (daemonManager) {
@@ -552,6 +562,54 @@ function stopPeriodicStatusRefresh(): void {
             activityLogger.log('Periodic status refresh stopped');
         }
     }
+}
+
+/**
+ * Try to stop all services before daemon shutdown/restart.
+ * This prevents orphan processes from holding ports after extension lifecycle events.
+ */
+async function requestStopAllBeforeShutdown(reason: string): Promise<void> {
+    const client = rpcClient;
+    if (!client) {
+        return;
+    }
+
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timeoutHandle);
+                resolve();
+            }
+        };
+
+        const timeoutHandle = setTimeout(() => {
+            if (activityLogger) {
+                activityLogger.log(
+                    `Timed out waiting for stopAll before ${reason} after ${STOP_ALL_BEFORE_SHUTDOWN_TIMEOUT_MS}ms`
+                );
+            }
+            finish();
+        }, STOP_ALL_BEFORE_SHUTDOWN_TIMEOUT_MS);
+
+        client.request('stopAll')
+            .then(() => {
+                if (activityLogger) {
+                    activityLogger.logServiceAction('all', `stopAll acknowledged before ${reason}`);
+                }
+                finish();
+            })
+            .catch((err) => {
+                if (activityLogger) {
+                    activityLogger.logError(
+                        `stopAll before ${reason}`,
+                        err instanceof Error ? err.message : String(err)
+                    );
+                }
+                finish();
+            });
+    });
 }
 
 /**

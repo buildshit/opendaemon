@@ -119,9 +119,20 @@ async fn run_daemon_mode(config_path: PathBuf) -> i32 {
     };
 
     // Create and run RPC server
-    let rpc_server = RpcServer::with_cli_ipc(orchestrator, config_path);
+    let rpc_server = RpcServer::with_cli_ipc(Arc::clone(&orchestrator), config_path);
     if let Err(e) = rpc_server.run().await {
         eprintln!("RPC server error: {}", e);
+        return 1;
+    }
+
+    // When stdio closes (for example extension shutdown/reload), stop all managed
+    // services before exiting so no orphan processes keep ports occupied.
+    let stop_result = {
+        let mut orch = orchestrator.lock().await;
+        orch.stop_all().await
+    };
+    if let Err(e) = stop_result {
+        eprintln!("Failed to stop services during daemon shutdown: {}", e);
         return 1;
     }
 

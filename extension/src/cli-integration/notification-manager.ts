@@ -12,7 +12,7 @@ const FIRST_TIME_NOTIFICATION_KEY = 'opendaemon.cliIntegration.firstTimeNotifica
  * Manages user notifications for CLI integration
  */
 export class NotificationManager {
-  constructor(private context: vscode.ExtensionContext) {}
+  constructor(private context: vscode.ExtensionContext) { }
 
   /**
    * Shows first-time notification about CLI availability
@@ -55,7 +55,7 @@ export class NotificationManager {
       terminal.show();
     } else if (selection === viewDocs) {
       // Open documentation
-      const docsUri = vscode.Uri.parse('https://github.com/opendaemon/opendaemon/blob/main/CLI.md');
+      const docsUri = vscode.Uri.parse('https://github.com/buildshit/opendaemon/blob/main/CLI.md');
       vscode.env.openExternal(docsUri);
     }
   }
@@ -72,7 +72,7 @@ export class NotificationManager {
     );
 
     if (selection === viewDocs) {
-      const docsUri = vscode.Uri.parse('https://github.com/opendaemon/opendaemon/blob/main/CLI.md#troubleshooting');
+      const docsUri = vscode.Uri.parse('https://github.com/buildshit/opendaemon/blob/main/CLI.md#troubleshooting');
       vscode.env.openExternal(docsUri);
     }
   }
@@ -89,7 +89,7 @@ export class NotificationManager {
     if (platform.os === 'win32') {
       // Windows instructions
       message = 'To use the OpenDaemon CLI globally in any terminal:';
-      instructions = 
+      instructions =
         '1. Open System Properties (Win + Pause/Break)\n' +
         '2. Click "Advanced system settings"\n' +
         '3. Click "Environment Variables"\n' +

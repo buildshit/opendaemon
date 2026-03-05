@@ -55,6 +55,17 @@ Quick Windows maintainer loop:
 .\scripts\package-and-install-extension.ps1
 ```
 
+Repeatable OpenDaemon-driven local distribution test:
+
+```powershell
+dmn start local-dist --config .\dmn.json
+```
+
+Notes:
+
+- The `local-dist` service in `dmn.json` runs the same package+install workflow used above.
+- Packaging now auto-stops stale processes running from `dist/dmn-win32-x64.exe` before copying a new binary, so repeated local test runs are less likely to fail on file locks.
+
 Package from existing multi-platform binaries in `dist/`:
 
 ```powershell

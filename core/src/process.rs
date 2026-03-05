@@ -280,8 +280,16 @@ impl ProcessManager {
 
         #[cfg(windows)]
         {
-            // On Windows, we can't send SIGTERM, so we'll just try to kill
-            let _ = process.child.kill().await;
+            // Use taskkill /T so wrapper commands (cmd/powershell/npm) don't leave
+            // descendants running in the background.
+            if let Some(pid) = process.child.id() {
+                if Self::kill_process_tree_windows(pid, true).await.is_err() {
+                    // Fallback to direct kill if taskkill fails unexpectedly.
+                    let _ = process.child.kill().await;
+                }
+            } else {
+                let _ = process.child.kill().await;
+            }
         }
 
         // Wait for process to exit with timeout
@@ -302,7 +310,22 @@ impl ProcessManager {
             }
             Err(_) => {
                 // Timeout - force kill
-                process.child.kill().await?;
+                #[cfg(windows)]
+                {
+                    if let Some(pid) = process.child.id() {
+                        if Self::kill_process_tree_windows(pid, true).await.is_err() {
+                            process.child.kill().await?;
+                        }
+                    } else {
+                        process.child.kill().await?;
+                    }
+                }
+
+                #[cfg(not(windows))]
+                {
+                    process.child.kill().await?;
+                }
+
                 process.child.wait().await?;
                 process.status = ServiceStatus::Stopped;
                 Ok(())
@@ -498,6 +521,44 @@ impl ProcessManager {
 
         Ok(args)
     }
+
+    #[cfg(windows)]
+    async fn kill_process_tree_windows(pid: u32, force: bool) -> Result<(), ProcessError> {
+        let mut taskkill = Command::new("taskkill");
+        taskkill.arg("/PID").arg(pid.to_string()).arg("/T");
+        if force {
+            taskkill.arg("/F");
+        }
+
+        let output = taskkill.output().await?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // Treat already-stopped processes as success.
+        let combined_output = format!(
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .to_lowercase();
+        if combined_output.contains("not found")
+            || combined_output.contains("not running")
+            || combined_output.contains("no running instance")
+            || combined_output.contains("cannot find the process")
+        {
+            return Ok(());
+        }
+
+        Err(ProcessError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "taskkill failed for pid {}: {}",
+                pid,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -507,6 +568,73 @@ mod tests {
 
     fn create_test_log_buffer() -> Arc<Mutex<LogBuffer>> {
         Arc::new(Mutex::new(LogBuffer::new(1000)))
+    }
+
+    #[cfg(windows)]
+    fn reserve_free_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    #[cfg(windows)]
+    fn wait_for_port_open(port: u16, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    #[cfg(windows)]
+    fn wait_for_port_free(port: u16, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+                drop(listener);
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    #[cfg(windows)]
+    fn cleanup_process_using_port(port: u16) {
+        let output = std::process::Command::new("netstat")
+            .args(["-ano", "-p", "tcp"])
+            .output();
+
+        let output = match output {
+            Ok(out) => out,
+            Err(_) => return,
+        };
+
+        let port_suffix = format!(":{}", port);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 5 {
+                continue;
+            }
+
+            let local_addr = parts[1];
+            let state = parts[3];
+            let pid_str = parts[4];
+
+            if !local_addr.ends_with(&port_suffix) || state != "LISTENING" {
+                continue;
+            }
+
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
+            }
+        }
     }
 
     #[test]
@@ -888,6 +1016,67 @@ mod tests {
         // explicitly, regardless of exit code (killed processes have non-zero exit codes)
         let status = manager.get_status("test_service").unwrap();
         assert_eq!(status, ServiceStatus::Stopped);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_stop_service_kills_process_tree_and_releases_port() {
+        let log_buffer = create_test_log_buffer();
+        let mut manager = ProcessManager::new(log_buffer);
+
+        let port = reserve_free_port();
+        let script_path = std::env::temp_dir().join(format!("dmn_port_holder_{}.ps1", port));
+        let script_content = format!(
+            "$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, {})\n$listener.Start()\nwhile ($true) {{ Start-Sleep -Milliseconds 200 }}\n",
+            port
+        );
+        std::fs::write(&script_path, script_content).unwrap();
+        let script_path_arg = script_path.to_string_lossy().replace('\\', "/");
+
+        // Intentionally run through cmd -> powershell to mirror common wrapper usage and
+        // verify we terminate the full process tree, not just the direct child.
+        let command = format!(
+            "cmd /c powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+            script_path_arg
+        );
+
+        let config = ServiceConfig {
+            command,
+            depends_on: vec![],
+            ready_when: None,
+            env_file: None,
+        };
+
+        manager
+            .spawn_service("tree_service", &config)
+            .await
+            .unwrap();
+        manager.update_status("tree_service", ServiceStatus::Running);
+
+        assert!(
+            wait_for_port_open(port, Duration::from_secs(5)),
+            "service did not open test port {} in time",
+            port
+        );
+
+        let stop_result = manager.stop_service("tree_service").await;
+        if stop_result.is_err() {
+            cleanup_process_using_port(port);
+            let _ = std::fs::remove_file(&script_path);
+        }
+        assert!(stop_result.is_ok(), "stop_service failed: {:?}", stop_result);
+
+        let port_released = wait_for_port_free(port, Duration::from_secs(5));
+        if !port_released {
+            cleanup_process_using_port(port);
+        }
+        let _ = std::fs::remove_file(&script_path);
+
+        assert!(
+            port_released,
+            "test port {} is still busy after stop_service",
+            port
+        );
     }
 
     #[tokio::test]

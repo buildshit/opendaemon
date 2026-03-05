@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { resolveDmnBinaryPath } from './binary-path';
@@ -43,30 +43,70 @@ export class DaemonManager {
     async stop(): Promise<void> {
         this.isShuttingDown = true;
         
-        if (!this.process) {
+        const daemonProcess = this.process;
+        if (!daemonProcess) {
             return;
         }
 
         return new Promise((resolve) => {
-            if (!this.process) {
-                resolve();
-                return;
-            }
+            let termTimer: NodeJS.Timeout | undefined;
+            let killTimer: NodeJS.Timeout | undefined;
+            let settled = false;
 
-            this.process.once('exit', () => {
+            const finalize = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (termTimer) {
+                    clearTimeout(termTimer);
+                }
+                if (killTimer) {
+                    clearTimeout(killTimer);
+                }
                 this.process = null;
                 resolve();
-            });
+            };
 
-            // Send SIGTERM
-            this.process.kill('SIGTERM');
+            daemonProcess.once('exit', finalize);
 
-            // Force kill after 5 seconds
-            setTimeout(() => {
-                if (this.process) {
-                    this.process.kill('SIGKILL');
+            // Prefer a graceful EOF shutdown so daemon code can stop all services.
+            // If it doesn't exit in time, escalate to hard kills.
+            try {
+                daemonProcess.stdin?.end();
+            } catch {
+                // Ignore stdin closure errors; fallback timers below handle shutdown.
+            }
+
+            termTimer = setTimeout(() => {
+                if (this.process === daemonProcess && daemonProcess.exitCode === null) {
+                    try {
+                        daemonProcess.kill('SIGTERM');
+                    } catch {
+                        // Ignore signal errors; SIGKILL fallback remains.
+                    }
                 }
-            }, 5000);
+            }, 3000);
+
+            killTimer = setTimeout(() => {
+                if (this.process === daemonProcess && daemonProcess.exitCode === null) {
+                    if (process.platform === 'win32' && daemonProcess.pid) {
+                        execFile(
+                            'taskkill',
+                            ['/PID', String(daemonProcess.pid), '/T', '/F'],
+                            () => {
+                                // Ignore taskkill errors; process may have already exited.
+                            }
+                        );
+                    } else {
+                        try {
+                            daemonProcess.kill('SIGKILL');
+                        } catch {
+                            // Process may already be gone.
+                        }
+                    }
+                }
+            }, 8000);
         });
     }
 
